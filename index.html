@@ -11,7 +11,7 @@
   <!-- Root-level stylesheet -->
   <link rel="stylesheet" href="./style.css"/>
 
-  <!-- Components (root-level, no folders) -->
+  <!-- Components -->
   <script defer src="./navbar.js"></script>
   <script defer src="./kpi-card.js"></script>
   <script defer src="./status-badge.js"></script>
@@ -19,6 +19,9 @@
 
   <!-- CSV parser -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Chart.js for bar charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
@@ -56,12 +59,22 @@
                   <th>client_name</th>
                   <th>due_date</th>
                   <th>qty_due</th>
-                  <th>label</th>
                 </tr>
               </thead>
               <tbody id="previewTbody"></tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- Work by Client (Remaining) -->
+      <section class="mt-10">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Work by Client (Remaining)</h2>
+          <span class="text-sm text-gray-500">Top 10 by remaining to due date</span>
+        </div>
+        <div class="card mt-4">
+          <canvas id="byClientChart" height="120"></canvas>
         </div>
       </section>
 
@@ -80,6 +93,7 @@
                 <th>Qty Due</th>
                 <th>Completed</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="due-soon-body"></tbody>
