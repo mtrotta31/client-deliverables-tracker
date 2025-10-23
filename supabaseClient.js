@@ -1,11 +1,10 @@
-
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.1";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./env.js";
-
-export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
-
-export function supabaseReady(){
-  return !!supabase;
+let _supabase=null;
+export function supabaseReady(){ return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY); }
+export async function getSupabase(){
+  if(!supabaseReady()) return null;
+  if(_supabase) return _supabase;
+  const mod = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.1/+esm");
+  _supabase = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _supabase;
 }
