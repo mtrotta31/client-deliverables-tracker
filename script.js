@@ -16,7 +16,7 @@ const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const dueSoonTbody = document.querySelector('#due-soon-body');
-let byClientChart; // Chart.js instance
+let byClientChart;
 
 // CSV importer refs
 const fileInput = document.querySelector('#csvFile');
@@ -33,7 +33,7 @@ const clientsTableBody = document.querySelector('#clientsBody');
 const clientNameEl = document.querySelector('#clientName');
 const clientMetaEl = document.querySelector('#clientMeta');
 const deliverablesBody = document.querySelector('#deliverablesBody');
-let clientDueChart; // Chart.js instance
+let clientDueChart;
 
 /* ---------- CSV Preview (due-date only) ---------- */
 if (previewBtn) {
@@ -84,7 +84,7 @@ if (importBtn) {
         try {
           const result = await importRows(data, supabase);
           importSummary.textContent = `Imported ${result.clients} clients and ${result.deliverables} deliverables.`;
-          await loadDashboard(); // refresh KPIs & chart/table
+          await loadDashboard();
         } catch (e) {
           console.error(e);
           alert('Import failed. See console.');
@@ -97,7 +97,6 @@ if (importBtn) {
 }
 
 async function importRows(rows, supabase){
-  // Build unique set of clients keyed by explicit client_id OR lowercase name
   const byKey = new Map();
   for (const r of rows) {
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -118,7 +117,6 @@ async function importRows(rows, supabase){
 
   let insertedClients = 0;
   const keyToId = new Map();
-
   for (const [key, obj] of byKey.entries()){
     if (obj.client_id){
       const { data, error } = await supabase.from('clients').upsert(obj, { onConflict: 'client_id' }).select('id').single();
@@ -138,28 +136,23 @@ async function importRows(rows, supabase){
     }
   }
 
-  // Due-date-only deliverables (ignore label/"weekly drop")
   let insertedDeliverables = 0;
   for (const r of rows){
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
     const client_fk = keyToId.get(key);
     if (!client_fk) continue;
-
     const deliverable = {
       deliverable_id: (r.deliverable_id||'').trim() || null,
       client_fk,
       due_date: r.due_date ? new Date(r.due_date).toISOString().slice(0,10) : null,
       qty_due: Number(r.qty_due||0),
-      // label intentionally omitted for MVP
       label: null
     };
-
     if (deliverable.deliverable_id){
       const { error } = await supabase.from('deliverables').upsert(deliverable, { onConflict: 'deliverable_id' });
       if (error) throw error;
       insertedDeliverables++;
     } else {
-      // check existence by (client_fk + due_date) ONLY
       const { data: ex, error: exErr } = await supabase
         .from('deliverables')
         .select('id')
@@ -177,110 +170,78 @@ async function importRows(rows, supabase){
       }
     }
   }
-
   return { clients: insertedClients, deliverables: insertedDeliverables };
 }
 
 /* ---------- Dashboard rendering (+ quick "Log" + bar chart) ---------- */
 async function loadDashboard(){
-  if (!kpiTotal) return; // not on dashboard
+  if (!kpiTotal) return;
   const supabase = await getSupabase();
   if (!supabase){
     kpiTotal.setAttribute('value', '—');
     kpiCompleted.setAttribute('value', '—');
     kpiRemaining.setAttribute('value', '—');
-    dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
-    const canvas = document.getElementById('byClientChart');
-    if (canvas && canvas.getContext) canvas.getContext('2d').font = '12px sans-serif';
+    if (dueSoonTbody) dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
     return;
   }
-
-  const { data: progress, error } = await supabase
-    .from('deliverable_progress')
-    .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
-  if (error) { console.error(error); return; }
+  const { data: progress, error } = await supabase.from('deliverable_progress').select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
+  if (error){ console.error(error); return; }
 
   const total = progress.reduce((a,b)=>a+(b.qty_due||0),0);
   const remaining = progress.reduce((a,b)=>a+(b.remaining_to_due||0),0);
   const completed = total - remaining;
-
   kpiTotal.setAttribute('value', fmt(total));
   kpiCompleted.setAttribute('value', fmt(completed));
   kpiRemaining.setAttribute('value', fmt(remaining));
 
+  // table
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
   if (clientIds.length === 0){
-    dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">No deliverables yet. Try importing a CSV.</td></tr>`;
-    return;
-  }
-  const { data: clients, error: cErr } = await supabase.from('clients').select('id,name').in('id', clientIds);
-  if (cErr) { console.error(cErr); return; }
-  const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
+    if (dueSoonTbody) dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">No deliverables yet. Try importing a CSV.</td></tr>`;
+  } else {
+    const { data: clients, error: cErr } = await supabase.from('clients').select('id,name').in('id', clientIds);
+    if (cErr){ console.error(cErr); return; }
+    const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
+    progress.sort((a,b)=> new Date(a.due_date) - new Date(b.due_date));
+    if (dueSoonTbody){
+      dueSoonTbody.innerHTML = '';
+      progress.slice(0, 10).forEach(p => {
+        const status = simpleStatus(p.remaining_to_due, p.due_date);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${p.client_fk}">${idToName[p.client_fk] || '—'}</a></td>
+          <td class="text-sm">${p.due_date}</td>
+          <td class="text-sm">${fmt(p.qty_due)}</td>
+          <td class="text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
+          <td class="text-sm"><status-badge status="${status}"></status-badge></td>
+          <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button></td>`;
+        dueSoonTbody.appendChild(tr);
+      });
+      dueSoonTbody.addEventListener('click', async (e)=>{
+        const btn = e.target.closest('button[data-log]');
+        if (!btn) return;
+        const deliverableId = btn.getAttribute('data-log');
+        const qty = Number(prompt('Qty completed?'));
+        if (!qty || qty <= 0) return;
+        const note = prompt('Optional note?') || null;
+        const occurred = new Date().toISOString().slice(0,10);
+        const { error: insErr } = await supabase.from('completions').insert({ deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty, note });
+        if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
+        await loadDashboard();
+      });
+    }
 
-  // Table: upcoming due dates
-  progress.sort((a,b)=> new Date(a.due_date) - new Date(b.due_date));
-  dueSoonTbody.innerHTML = '';
-  progress.slice(0, 10).forEach(p => {
-    const status = simpleStatus(p.remaining_to_due, p.due_date);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="text-sm">
-        <a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${p.client_fk}">
-          ${idToName[p.client_fk] || '—'}
-        </a>
-      </td>
-      <td class="text-sm">${p.due_date}</td>
-      <td class="text-sm">${fmt(p.qty_due)}</td>
-      <td class="text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
-      <td class="text-sm"><status-badge status="${status}"></status-badge></td>
-      <td class="text-sm">
-        <button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">
-          Log
-        </button>
-      </td>`;
-    dueSoonTbody.appendChild(tr);
-  });
-
-  // Quick log handler (Dashboard)
-  dueSoonTbody.addEventListener('click', async (e)=>{
-    const btn = e.target.closest('button[data-log]');
-    if (!btn) return;
-    const deliverableId = btn.getAttribute('data-log');
-    const qty = Number(prompt('Qty completed?'));
-    if (!qty || qty <= 0) return;
-    const note = prompt('Optional note?') || null;
-    const occurred = new Date().toISOString().slice(0,10);
-    const { error: insErr } = await supabase.from('completions').insert({
-      deliverable_fk: deliverableId,
-      occurred_on: occurred,
-      qty_completed: qty,
-      note
-    });
-    if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
-    await loadDashboard(); // refresh KPIs/table/chart
-  });
-
-  // Chart: remaining by client (top 10)
-  const agg = {};
-  for (const p of progress) {
-    agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
-  }
-  const sorted = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
-  const labels = sorted.map(([id]) => idToName[id] || '—');
-  const values = sorted.map(([,v]) => v);
-
-  const ctx = document.getElementById('byClientChart')?.getContext('2d');
-  if (ctx) {
-    if (byClientChart) byClientChart.destroy();
-    byClientChart = new Chart(ctx, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: 'Remaining', data: values }] },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
-      }
-    });
+    // chart
+    const agg = {};
+    for (const p of progress) agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
+    const sorted = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
+    const labels = sorted.map(([id]) => idToName[id] || '—');
+    const values = sorted.map(([,v]) => v);
+    const ctx = document.getElementById('byClientChart')?.getContext('2d');
+    if (ctx && window.Chart){
+      if (byClientChart) byClientChart.destroy();
+      byClientChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [{ label: 'Remaining', data: values }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } } });
+    }
   }
 }
 
@@ -305,10 +266,7 @@ async function loadClientsList(){
   clientsTableBody.innerHTML = '';
   data.forEach(c => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${c.id}">${c.name}</a></td>
-      <td class="text-sm">${c.start_date || '—'}</td>
-      <td class="text-sm">—</td>`;
+    tr.innerHTML = `<td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${c.id}">${c.name}</a></td><td class="text-sm">${c.start_date || '—'}</td><td class="text-sm">—</td>`;
     clientsTableBody.appendChild(tr);
   });
 }
@@ -328,72 +286,42 @@ async function loadClientDetail(){
   clientNameEl.textContent = client.name;
   clientMetaEl.textContent = `${client.products || ''} — ${client.addresses || ''}`;
 
-  const { data: delivs, error: dErr } = await supabase
-    .from('deliverables')
-    .select('id,due_date,qty_due')
-    .eq('client_fk', id)
-    .order('due_date', {ascending: true});
+  const { data: delivs, error: dErr } = await supabase.from('deliverables').select('id,due_date,qty_due').eq('client_fk', id).order('due_date', {ascending: true});
   if (dErr){ console.error(dErr); return; }
 
-  // Build rows + chart data
   deliverablesBody.innerHTML = '';
-  const labels = [];
-  const values = [];
+  const labels = [], values = [];
   for (const d of delivs){
-    const { data: prog, error: pErr } = await supabase
-      .from('deliverable_progress')
-      .select('remaining_to_due')
-      .eq('deliverable_id', d.id)
-      .single();
+    const { data: prog, error: pErr } = await supabase.from('deliverable_progress').select('remaining_to_due').eq('deliverable_id', d.id).single();
     if (pErr){ console.error(pErr); continue; }
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
-
     labels.push(d.due_date);
     values.push(remaining);
-
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="text-sm">${d.due_date}</td>
-      <td class="text-sm">${fmt(d.qty_due)}</td>
-      <td class="text-sm">${fmt(d.qty_due - remaining)}</td>
-      <td class="text-sm">${fmt(remaining)}</td>
-      <td class="text-sm"><status-badge status="${status}"></status-badge></td>
-      <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${d.id}">Log completion</button></td>`;
+    tr.innerHTML = `<td class="text-sm">${d.due_date}</td><td class="text-sm">${fmt(d.qty_due)}</td><td class="text-sm">${fmt(d.qty_due - remaining)}</td><td class="text-sm">${fmt(remaining)}</td><td class="text-sm"><status-badge status="${status}"></status-badge></td><td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${d.id}">Log completion</button></td>`;
     deliverablesBody.appendChild(tr);
   }
 
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
-  if (ctx) {
+  if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
-    clientDueChart = new Chart(ctx, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: 'Remaining', data: values }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-    });
+    clientDueChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [{ label: 'Remaining', data: values }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } } });
   }
 
-  // Log handler (Client detail)
   deliverablesBody.addEventListener('click', async (e)=>{
     const btn = e.target.closest('button[data-log]');
     if (!btn) return;
     const deliverableId = btn.getAttribute('data-log');
-    const qty = Number(prompt('Qty completed?'));
-    if (!qty || qty <= 0) return;
+    const qty = Number(prompt('Qty completed?')); if (!qty || qty <= 0) return;
     const note = prompt('Optional note?') || null;
     const occurred = new Date().toISOString().slice(0,10);
-    const { error } = await supabase.from('completions').insert({
-      deliverable_fk: deliverableId,
-      occurred_on: occurred,
-      qty_completed: qty,
-      note
-    });
+    const { error } = await supabase.from('completions').insert({ deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty, note });
     if (error){ alert('Failed to log completion.'); console.error(error); return; }
     alert('Logged! Refreshing…'); location.reload();
   });
 }
 
-/* ---------- Boot ---------- */
 window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();

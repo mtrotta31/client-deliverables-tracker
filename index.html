@@ -5,22 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Deliverables Tracker — Dashboard</title>
 
-  <!-- Tailwind (CDN is fine for MVP) -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Root-level stylesheet -->
   <link rel="stylesheet" href="./style.css"/>
 
-  <!-- Components -->
   <script defer src="./navbar.js"></script>
   <script defer src="./kpi-card.js"></script>
   <script defer src="./status-badge.js"></script>
   <script defer src="./footer.js"></script>
 
-  <!-- CSV parser -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
-  <!-- Chart.js for bar charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -30,19 +23,17 @@
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
       <h1 class="text-2xl font-semibold">Dashboard</h1>
 
-      <!-- KPIs -->
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
         <kpi-card id="kpi-total" label="Total Due" value="—"></kpi-card>
         <kpi-card id="kpi-completed" label="Completed" value="—"></kpi-card>
         <kpi-card id="kpi-remaining" label="Remaining" value="—"></kpi-card>
       </div>
 
-      <!-- CSV Importer -->
       <section class="mt-10">
         <div class="card">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold">Import CSV</h2>
-            <div class="text-sm text-gray-500">Single CSV of clients + deliverables</div>
+            <div class="text-sm text-gray-500">One row per client; due-date only</div>
           </div>
           <div class="mt-4 flex items-center gap-3">
             <input id="csvFile" type="file" accept=".csv" class="text-sm"/>
@@ -67,7 +58,6 @@
         </div>
       </section>
 
-      <!-- Work by Client (Remaining) -->
       <section class="mt-10">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold">Work by Client (Remaining)</h2>
@@ -78,7 +68,6 @@
         </div>
       </section>
 
-      <!-- Due soon -->
       <section class="mt-10">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold">Upcoming Due Dates</h2>
@@ -105,7 +94,6 @@
 
   <app-footer></app-footer>
 
-  <!-- Root-level modules -->
   <script type="module" src="./env.js"></script>
   <script type="module" src="./supabaseClient.js"></script>
   <script type="module" src="./script.js"></script>
