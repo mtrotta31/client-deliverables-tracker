@@ -16,6 +16,7 @@ const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const dueSoonTbody = document.querySelector('#due-soon-body');
+let byClientChart; // Chart.js instance
 
 // CSV importer refs
 const fileInput = document.querySelector('#csvFile');
@@ -32,8 +33,9 @@ const clientsTableBody = document.querySelector('#clientsBody');
 const clientNameEl = document.querySelector('#clientName');
 const clientMetaEl = document.querySelector('#clientMeta');
 const deliverablesBody = document.querySelector('#deliverablesBody');
+let clientDueChart; // Chart.js instance
 
-/* ---------- CSV Preview ---------- */
+/* ---------- CSV Preview (due-date only) ---------- */
 if (previewBtn) {
   previewBtn.addEventListener('click', () => {
     const f = fileInput?.files?.[0];
@@ -58,15 +60,14 @@ function renderPreview(rows){
       <td class="text-xs">${r.client_id||''}</td>
       <td class="text-xs">${r.client_name||''}</td>
       <td class="text-xs">${r.due_date||''}</td>
-      <td class="text-xs">${r.qty_due||''}</td>
-      <td class="text-xs">${r.label||''}</td>`;
+      <td class="text-xs">${r.qty_due||''}</td>`;
     previewTbody.appendChild(tr);
   });
   previewTable.classList.remove('hidden');
   importSummary.textContent = `${rows.length} rows parsed. Ready to import.`;
 }
 
-/* ---------- CSV Import (Supabase upsert) ---------- */
+/* ---------- CSV Import (due-date only upsert) ---------- */
 if (importBtn) {
   importBtn.addEventListener('click', async () => {
     const supabase = await getSupabase();
@@ -83,7 +84,7 @@ if (importBtn) {
         try {
           const result = await importRows(data, supabase);
           importSummary.textContent = `Imported ${result.clients} clients and ${result.deliverables} deliverables.`;
-          await loadDashboard(); // refresh KPIs & table
+          await loadDashboard(); // refresh KPIs & chart/table
         } catch (e) {
           console.error(e);
           alert('Import failed. See console.');
@@ -96,7 +97,8 @@ if (importBtn) {
 }
 
 async function importRows(rows, supabase){
-  const byKey = new Map(); // key: client_id || lower(name)
+  // Build unique set of clients keyed by explicit client_id OR lowercase name
+  const byKey = new Map();
   for (const r of rows) {
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
     if (!key) continue;
@@ -115,7 +117,7 @@ async function importRows(rows, supabase){
   }
 
   let insertedClients = 0;
-  const keyToId = new Map(); // map from key -> clients.id
+  const keyToId = new Map();
 
   for (const [key, obj] of byKey.entries()){
     if (obj.client_id){
@@ -126,9 +128,8 @@ async function importRows(rows, supabase){
     } else {
       const { data: existing, error: findErr } = await supabase.from('clients').select('id').ilike('name', obj.name).maybeSingle();
       if (findErr) throw findErr;
-      if (existing) {
-        keyToId.set(key, existing.id);
-      } else {
+      if (existing) keyToId.set(key, existing.id);
+      else {
         const { data: ins, error: insErr } = await supabase.from('clients').insert(obj).select('id').single();
         if (insErr) throw insErr;
         keyToId.set(key, ins.id);
@@ -137,29 +138,33 @@ async function importRows(rows, supabase){
     }
   }
 
+  // Due-date-only deliverables (ignore label/"weekly drop")
   let insertedDeliverables = 0;
   for (const r of rows){
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
     const client_fk = keyToId.get(key);
     if (!client_fk) continue;
+
     const deliverable = {
       deliverable_id: (r.deliverable_id||'').trim() || null,
       client_fk,
       due_date: r.due_date ? new Date(r.due_date).toISOString().slice(0,10) : null,
       qty_due: Number(r.qty_due||0),
-      label: (r.label||'').trim()
+      // label intentionally omitted for MVP
+      label: null
     };
+
     if (deliverable.deliverable_id){
       const { error } = await supabase.from('deliverables').upsert(deliverable, { onConflict: 'deliverable_id' });
       if (error) throw error;
       insertedDeliverables++;
     } else {
+      // check existence by (client_fk + due_date) ONLY
       const { data: ex, error: exErr } = await supabase
         .from('deliverables')
         .select('id')
         .eq('client_fk', client_fk)
         .eq('due_date', deliverable.due_date)
-        .eq('label', deliverable.label || '')
         .maybeSingle();
       if (exErr) throw exErr;
       if (ex) {
@@ -176,7 +181,7 @@ async function importRows(rows, supabase){
   return { clients: insertedClients, deliverables: insertedDeliverables };
 }
 
-/* ---------- Dashboard rendering (+ quick "Log") ---------- */
+/* ---------- Dashboard rendering (+ quick "Log" + bar chart) ---------- */
 async function loadDashboard(){
   if (!kpiTotal) return; // not on dashboard
   const supabase = await getSupabase();
@@ -185,10 +190,11 @@ async function loadDashboard(){
     kpiCompleted.setAttribute('value', '—');
     kpiRemaining.setAttribute('value', '—');
     dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
+    const canvas = document.getElementById('byClientChart');
+    if (canvas && canvas.getContext) canvas.getContext('2d').font = '12px sans-serif';
     return;
   }
 
-  // include deliverable_id so we can quick-log from the dashboard
   const { data: progress, error } = await supabase
     .from('deliverable_progress')
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
@@ -211,6 +217,7 @@ async function loadDashboard(){
   if (cErr) { console.error(cErr); return; }
   const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
 
+  // Table: upcoming due dates
   progress.sort((a,b)=> new Date(a.due_date) - new Date(b.due_date));
   dueSoonTbody.innerHTML = '';
   progress.slice(0, 10).forEach(p => {
@@ -250,11 +257,34 @@ async function loadDashboard(){
       note
     });
     if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
-    await loadDashboard(); // refresh KPIs/table to reflect the new completion
+    await loadDashboard(); // refresh KPIs/table/chart
   });
+
+  // Chart: remaining by client (top 10)
+  const agg = {};
+  for (const p of progress) {
+    agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
+  }
+  const sorted = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
+  const labels = sorted.map(([id]) => idToName[id] || '—');
+  const values = sorted.map(([,v]) => v);
+
+  const ctx = document.getElementById('byClientChart')?.getContext('2d');
+  if (ctx) {
+    if (byClientChart) byClientChart.destroy();
+    byClientChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Remaining', data: values }] },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
+      }
+    });
+  }
 }
 
-/* ---------- Clients list (fix: show errors in-page) ---------- */
+/* ---------- Clients list ---------- */
 async function loadClientsList(){
   if (!clientsTableBody) return;
   const supabase = await getSupabase();
@@ -283,7 +313,7 @@ async function loadClientsList(){
   });
 }
 
-/* ---------- Client detail (includes Log completion) ---------- */
+/* ---------- Client detail (mini chart + Log) ---------- */
 async function loadClientDetail(){
   if (!clientNameEl) return;
   const id = new URL(window.location.href).searchParams.get('id');
@@ -300,12 +330,15 @@ async function loadClientDetail(){
 
   const { data: delivs, error: dErr } = await supabase
     .from('deliverables')
-    .select('id,due_date,qty_due,label')
+    .select('id,due_date,qty_due')
     .eq('client_fk', id)
     .order('due_date', {ascending: true});
   if (dErr){ console.error(dErr); return; }
 
+  // Build rows + chart data
   deliverablesBody.innerHTML = '';
+  const labels = [];
+  const values = [];
   for (const d of delivs){
     const { data: prog, error: pErr } = await supabase
       .from('deliverable_progress')
@@ -315,16 +348,29 @@ async function loadClientDetail(){
     if (pErr){ console.error(pErr); continue; }
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
+
+    labels.push(d.due_date);
+    values.push(remaining);
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="text-sm">${d.due_date}</td>
-      <td class="text-sm">${d.label || '—'}</td>
       <td class="text-sm">${fmt(d.qty_due)}</td>
       <td class="text-sm">${fmt(d.qty_due - remaining)}</td>
       <td class="text-sm">${fmt(remaining)}</td>
       <td class="text-sm"><status-badge status="${status}"></status-badge></td>
       <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${d.id}">Log completion</button></td>`;
     deliverablesBody.appendChild(tr);
+  }
+
+  const ctx = document.getElementById('clientDueChart')?.getContext('2d');
+  if (ctx) {
+    if (clientDueChart) clientDueChart.destroy();
+    clientDueChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Remaining', data: values }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
   }
 
   // Log handler (Client detail)
