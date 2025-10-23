@@ -1,0 +1,4 @@
+client_id,client_name,addresses,contact_name,contact_email,products,instructions,start_date,deliverable_id,due_date,qty_due,label
+,Acme Health,"123 Main; 50 Oak","Jane Smith",jane@acme.com,"Summaries","Prioritize DX…","2025-10-20",,2025-10-31,1500,Initial drop
+,Acme Health,"123 Main; 50 Oak","Jane Smith",jane@acme.com,"Summaries","Prioritize DX…","2025-10-20",,2025-11-07,1000,Weekly Friday drop
+UUID-Contoso,Contoso Clinics,"22 Pine Ave","Sam Lee",sam@contoso.com,"Summaries","Focus PCP first","2025-11-01",DLV-001,2025-11-14,800,Wave 1

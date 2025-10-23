@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Deliverables Tracker — Client</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./assets/style.css"/>
+  <script defer src="./components/navbar.js"></script>
+  <script defer src="./components/status-badge.js"></script>
+  <script defer src="./components/footer.js"></script>
+</head>
+<body class="min-h-screen flex flex-col">
+  <app-navbar></app-navbar>
+  <main class="flex-1">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
+      <div class="flex items-center justify-between">
+        <h1 id="clientName" class="text-2xl font-semibold">Client</h1>
+        <a href="./clients.html" class="text-sm text-indigo-600 hover:underline">Back to Clients</a>
+      </div>
+      <p id="clientMeta" class="text-sm text-gray-500 mt-1"></p>
+
+      <section class="mt-8 card overflow-auto">
+        <table>
+          <thead>
+            <tr class="text-xs text-gray-500">
+              <th>Due Date</th>
+              <th>Label</th>
+              <th>Due</th>
+              <th>Completed</th>
+              <th>Remaining</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="deliverablesBody"></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+  <app-footer></app-footer>
+
+  <script type="module" src="./js/env.js"></script>
+  <script type="module" src="./js/supabaseClient.js"></script>
+  <script type="module" src="./js/script.js"></script>
+</body>
+</html>
