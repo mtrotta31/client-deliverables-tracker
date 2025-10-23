@@ -70,7 +70,7 @@ function renderPreview(rows){
 if (importBtn) {
   importBtn.addEventListener('click', async () => {
     const supabase = await getSupabase();
-    if (!supabase) { alert('Supabase not configured (edit env.js).'); return; }
+    if (!supabase) { alert('Supabase not configured (edit env.js and Supabase CORS).'); return; }
     const f = fileInput?.files?.[0];
     if (!f) { alert('Choose a CSV file first.'); return; }
 
@@ -83,7 +83,7 @@ if (importBtn) {
         try {
           const result = await importRows(data, supabase);
           importSummary.textContent = `Imported ${result.clients} clients and ${result.deliverables} deliverables.`;
-          await loadDashboard(); // refresh KPIs
+          await loadDashboard(); // refresh KPIs & table
         } catch (e) {
           console.error(e);
           alert('Import failed. See console.');
@@ -96,7 +96,6 @@ if (importBtn) {
 }
 
 async function importRows(rows, supabase){
-  // 1) Upsert/resolve clients
   const byKey = new Map(); // key: client_id || lower(name)
   for (const r of rows) {
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -138,7 +137,6 @@ async function importRows(rows, supabase){
     }
   }
 
-  // 2) Upsert deliverables
   let insertedDeliverables = 0;
   for (const r of rows){
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -178,19 +176,19 @@ async function importRows(rows, supabase){
   return { clients: insertedClients, deliverables: insertedDeliverables };
 }
 
-/* ---------- Dashboard rendering ---------- */
+/* ---------- Dashboard rendering (+ quick "Log") ---------- */
 async function loadDashboard(){
   if (!kpiTotal) return; // not on dashboard
   const supabase = await getSupabase();
   if (!supabase){
-    // Demo state without DB
     kpiTotal.setAttribute('value', '—');
     kpiCompleted.setAttribute('value', '—');
     kpiRemaining.setAttribute('value', '—');
-    dueSoonTbody.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
+    dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
     return;
   }
 
+  // include deliverable_id so we can quick-log from the dashboard
   const { data: progress, error } = await supabase
     .from('deliverable_progress')
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
@@ -206,7 +204,7 @@ async function loadDashboard(){
 
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
   if (clientIds.length === 0){
-    dueSoonTbody.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-500 py-4">No deliverables yet. Try importing a CSV.</td></tr>`;
+    dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">No deliverables yet. Try importing a CSV.</td></tr>`;
     return;
   }
   const { data: clients, error: cErr } = await supabase.from('clients').select('id,name').in('id', clientIds);
@@ -219,25 +217,61 @@ async function loadDashboard(){
     const status = simpleStatus(p.remaining_to_due, p.due_date);
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="text-sm">${idToName[p.client_fk] || '—'}</td>
+      <td class="text-sm">
+        <a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${p.client_fk}">
+          ${idToName[p.client_fk] || '—'}
+        </a>
+      </td>
       <td class="text-sm">${p.due_date}</td>
       <td class="text-sm">${fmt(p.qty_due)}</td>
       <td class="text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
-      <td class="text-sm"><status-badge status="${status}"></status-badge></td>`;
+      <td class="text-sm"><status-badge status="${status}"></status-badge></td>
+      <td class="text-sm">
+        <button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">
+          Log
+        </button>
+      </td>`;
     dueSoonTbody.appendChild(tr);
+  });
+
+  // Quick log handler (Dashboard)
+  dueSoonTbody.addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button[data-log]');
+    if (!btn) return;
+    const deliverableId = btn.getAttribute('data-log');
+    const qty = Number(prompt('Qty completed?'));
+    if (!qty || qty <= 0) return;
+    const note = prompt('Optional note?') || null;
+    const occurred = new Date().toISOString().slice(0,10);
+    const { error: insErr } = await supabase.from('completions').insert({
+      deliverable_fk: deliverableId,
+      occurred_on: occurred,
+      qty_completed: qty,
+      note
+    });
+    if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
+    await loadDashboard(); // refresh KPIs/table to reflect the new completion
   });
 }
 
-/* ---------- Clients list ---------- */
+/* ---------- Clients list (fix: show errors in-page) ---------- */
 async function loadClientsList(){
   if (!clientsTableBody) return;
   const supabase = await getSupabase();
   if (!supabase){
-    clientsTableBody.innerHTML = `<tr><td colspan="3" class="text-sm text-gray-500 py-4">Connect Supabase to load clients.</td></tr>`;
+    clientsTableBody.innerHTML = `<tr><td colspan="3" class="text-sm text-gray-500 py-4">Connect Supabase to load clients (edit env.js).</td></tr>`;
     return;
   }
-  const { data, error } = await supabase.from('clients').select('id,name,start_date');
-  if (error){ console.error(error); return; }
+  const { data, error } = await supabase.from('clients').select('id,name,start_date').order('name');
+  if (error){
+    console.error(error);
+    clientsTableBody.innerHTML = `<tr><td colspan="3" class="text-sm text-red-600 py-4">Couldn't load clients: ${error.message}</td></tr>`;
+    return;
+  }
+  if (!data || data.length === 0){
+    clientsTableBody.innerHTML = `<tr><td colspan="3" class="text-sm text-gray-500 py-4">No clients yet. Import a CSV to create some.</td></tr>`;
+    return;
+  }
   clientsTableBody.innerHTML = '';
   data.forEach(c => {
     const tr = document.createElement('tr');
@@ -249,7 +283,7 @@ async function loadClientsList(){
   });
 }
 
-/* ---------- Client detail ---------- */
+/* ---------- Client detail (includes Log completion) ---------- */
 async function loadClientDetail(){
   if (!clientNameEl) return;
   const id = new URL(window.location.href).searchParams.get('id');
@@ -289,10 +323,11 @@ async function loadClientDetail(){
       <td class="text-sm">${fmt(d.qty_due - remaining)}</td>
       <td class="text-sm">${fmt(remaining)}</td>
       <td class="text-sm"><status-badge status="${status}"></status-badge></td>
-      <td class="text-sm"><button class="px-2 py-1 rounded-md bg-gray-900 text-white text-xs" data-log="${d.id}">Log completion</button></td>`;
+      <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${d.id}">Log completion</button></td>`;
     deliverablesBody.appendChild(tr);
   }
 
+  // Log handler (Client detail)
   deliverablesBody.addEventListener('click', async (e)=>{
     const btn = e.target.closest('button[data-log]');
     if (!btn) return;
@@ -301,7 +336,7 @@ async function loadClientDetail(){
     if (!qty || qty <= 0) return;
     const note = prompt('Optional note?') || null;
     const occurred = new Date().toISOString().slice(0,10);
-    const { error } = await (await getSupabase()).from('completions').insert({
+    const { error } = await supabase.from('completions').insert({
       deliverable_fk: deliverableId,
       occurred_on: occurred,
       qty_completed: qty,
