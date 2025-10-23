@@ -4,17 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Deliverables Tracker — Clients</title>
+
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="./assets/style.css"/>
-  <script defer src="./components/navbar.js"></script>
-  <script defer src="./components/status-badge.js"></script>
-  <script defer src="./components/footer.js"></script>
+  <link rel="stylesheet" href="./style.css"/>
+
+  <script defer src="./navbar.js"></script>
+  <script defer src="./status-badge.js"></script>
+  <script defer src="./footer.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
+
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
       <h1 class="text-2xl font-semibold">Clients</h1>
+
       <div class="card mt-6 overflow-auto">
         <table>
           <thead>
@@ -31,9 +35,11 @@
       </div>
     </div>
   </main>
+
   <app-footer></app-footer>
-  <script type="module" src="./js/env.js"></script>
-  <script type="module" src="./js/supabaseClient.js"></script>
-  <script type="module" src="./js/script.js"></script>
+
+  <script type="module" src="./env.js"></script>
+  <script type="module" src="./supabaseClient.js"></script>
+  <script type="module" src="./script.js"></script>
 </body>
 </html>
