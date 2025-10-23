@@ -1,20 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Deliverables Tracker — Dashboard</title>
+
   <!-- Tailwind (CDN is fine for MVP) -->
-<script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
 
-<!-- Use the ROOT stylesheet (no /assets/) -->
-<link rel="stylesheet" href="./style.css" />
+  <!-- Root-level stylesheet -->
+  <link rel="stylesheet" href="./style.css"/>
 
-<!-- Load components from the ROOT (no /components/) -->
-<script defer src="./navbar.js"></script>
-<script defer src="./kpi-card.js"></script>
-<script defer src="./status-badge.js"></script>
-<script defer src="./footer.js"></script>
+  <!-- Components (root-level, no folders) -->
+  <script defer src="./navbar.js"></script>
+  <script defer src="./kpi-card.js"></script>
+  <script defer src="./status-badge.js"></script>
+  <script defer src="./footer.js"></script>
 
-<!-- CSV parser -->
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- CSV parser -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
@@ -87,9 +91,9 @@
 
   <app-footer></app-footer>
 
-  <!-- Load from ROOT (no /js/) -->
-<script type="module" src="./env.js"></script>
-<script type="module" src="./supabaseClient.js"></script>
-<script type="module" src="./script.js"></script>
+  <!-- Root-level modules -->
+  <script type="module" src="./env.js"></script>
+  <script type="module" src="./supabaseClient.js"></script>
+  <script type="module" src="./script.js"></script>
 </body>
 </html>
