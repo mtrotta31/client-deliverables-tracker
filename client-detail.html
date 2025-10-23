@@ -11,6 +11,9 @@
   <script defer src="./navbar.js"></script>
   <script defer src="./status-badge.js"></script>
   <script defer src="./footer.js"></script>
+
+  <!-- Chart.js for the client mini chart -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
@@ -23,12 +26,17 @@
       </div>
       <p id="clientMeta" class="text-sm text-gray-500 mt-1"></p>
 
+      <!-- Mini bar chart -->
+      <section class="mt-6 card">
+        <h2 class="text-base font-semibold mb-2">Due by Date (Remaining)</h2>
+        <canvas id="clientDueChart" height="120"></canvas>
+      </section>
+
       <section class="mt-8 card overflow-auto">
         <table>
           <thead>
             <tr class="text-xs text-gray-500">
               <th>Due Date</th>
-              <th>Label</th>
               <th>Due</th>
               <th>Completed</th>
               <th>Remaining</th>
