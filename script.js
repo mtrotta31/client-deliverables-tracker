@@ -91,7 +91,7 @@ const logClose = document.getElementById('logClose');
 const logCancel= document.getElementById('logCancel');
 const logClientName = document.getElementById('logClientName');
 
-/* Add Client modal (from previous round) */
+/* Add Client modal (used on clients.html; safe no-ops on dashboard) */
 const modal = document.getElementById('clientModal');
 const modalTitle = document.getElementById('clientModalTitle');
 const btnOpen = document.getElementById('btnAddClient');
@@ -106,17 +106,15 @@ const btnAddAddr = document.getElementById('btnAddAddr');
 const btnAddEmr  = document.getElementById('btnAddEmr');
 const clientsTableBody = document.getElementById('clientsBody');
 
-/* =============== Add/Edit Client UI (unchanged) =============== */
+/* =============== Add/Edit Client UI =============== */
 function openClientModal(edit=null){
   if (!modal) return;
   modal.classList.remove('hidden');
   modalTitle.textContent = edit ? 'Edit Client' : 'Add Client';
   clientForm.reset();
   clientForm.client_id.value = edit?.id || '';
-  addressesList && (addressesList.innerHTML = '');
-  emrsList && (emrsList.innerHTML = '');
-  if (addressesList) addAddressRow();
-  if (emrsList) addEmrRow();
+  if (addressesList){ addressesList.innerHTML = ''; addAddressRow(); }
+  if (emrsList){ emrsList.innerHTML = ''; addEmrRow(); }
   if (edit){
     clientForm.name.value = edit.name||'';
     clientForm.total_lives.value = edit.total_lives||'';
@@ -304,11 +302,14 @@ function renderByClientChart(rows){
   const remHovers  = statuses.map(s=> statusColors(s).hover);
   const remBorders = statuses.map(s=> statusColors(s).stroke);
 
-  // width per bar; height is fixed by HTML (360px)
-  const widthPx = Math.max(1100, labels.length * 140);
-  const canvas = document.getElementById('byClientChart');
-  if (canvas) canvas.style.width = widthPx + 'px';
+  // --- Sizing: make the inner wrapper/canvas wide enough to scroll ---
+  const widthPx = Math.max(1100, labels.length * 140); // ~140px per client
+  const widthDiv = document.getElementById('chartWidth');
+  const canvas   = document.getElementById('byClientChart');
+  if (widthDiv) widthDiv.style.width = widthPx + 'px';
+  if (canvas)   canvas.width = widthPx;               // helps Chart.js layout
 
+  // Y-axis based on total stack height (completed+remaining)
   const totalsForAxis = labels.map((_,i)=> completes[i]+remains[i]);
   const yCfg = yScaleFor(totalsForAxis, 0.05);
 
@@ -321,16 +322,36 @@ function renderByClientChart(rows){
     data: {
       labels,
       datasets: [
-        { label:'Completed', data: completes,
-          backgroundColor: compFill, hoverBackgroundColor: compHover,
-          borderColor: compBorder, borderWidth: 1, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' },
-        { label:'Remaining', data: remains,
-          backgroundColor: remFills, hoverBackgroundColor: remHovers,
-          borderColor: remBorders, borderWidth: 1.5, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' }
+        {
+          label:'Completed',
+          data: completes,
+          backgroundColor: compFill,
+          hoverBackgroundColor: compHover,
+          borderColor: compBorder,
+          borderWidth: 1,
+          borderRadius: 10,
+          borderSkipped:false,
+          maxBarThickness: 44,
+          stack:'totals'
+        },
+        {
+          label:'Remaining',
+          data: remains,
+          backgroundColor: remFills,
+          hoverBackgroundColor: remHovers,
+          borderColor: remBorders,
+          borderWidth: 1.5,
+          borderRadius: 10,
+          borderSkipped:false,
+          maxBarThickness: 44,
+          stack:'totals'
+        }
       ]
     },
     options: {
-      responsive:true, maintainAspectRatio:false, animation:{ duration: 400 },
+      responsive: true,
+      maintainAspectRatio: false,     // height controlled by container
+      animation: { duration: 400 },
       plugins:{
         legend:{ display:true },
         tooltip:{
@@ -352,8 +373,27 @@ function renderByClientChart(rows){
         }
       },
       scales:{
-        x:{ stacked:true, grid:{display:false}, ticks:{ autoSkip:false, maxRotation:0, minRotation:0, font:{size:11} } },
-        y:{ stacked:true, min:yCfg.min, max:yCfg.max, ticks:{ stepSize:yCfg.stepSize }, grid:{ color:'rgba(17,24,39,0.08)' } }
+        x:{
+          stacked:true,
+          grid:{ display:false },
+          ticks:{
+            autoSkip:false,
+            maxRotation:0,
+            minRotation:0,
+            font:{ size:11 },
+            callback:(value, index)=>{
+              const label = labels[index] || '';
+              return label.length > 16 ? label.slice(0,16) + '…' : label;
+            }
+          }
+        },
+        y:{
+          stacked:true,
+          min:yCfg.min,
+          max:yCfg.max,
+          ticks:{ stepSize:yCfg.stepSize },
+          grid:{ color:'rgba(17,24,39,0.08)' }
+        }
       }
     },
     plugins: [barPercentPlugin]
@@ -362,7 +402,6 @@ function renderByClientChart(rows){
 
 function renderDueThisWeek(rows){
   if (!dueBody) return;
-  // show clients with required > 0, sorted by remaining desc
   const items = rows.filter(r=> r.required>0).sort((a,b)=> b.remaining - a.remaining);
   if (!items.length){
     dueBody.innerHTML = `<tr><td colspan="6" class="py-4 text-sm text-gray-500">No active commitments this week.</td></tr>`;
@@ -383,7 +422,6 @@ function renderDueThisWeek(rows){
       </tr>`;
   }).join('');
 
-  // attach log button handler (event delegation)
   dueBody.onclick = (e)=>{
     const btn = e.target.closest('button[data-log]');
     if (!btn) return;
@@ -393,13 +431,14 @@ function renderDueThisWeek(rows){
 
 /* =============== Log completion modal =============== */
 function openLogModal(clientId, name){
+  if (!logForm) return;
   logForm.client_id.value = clientId;
   logForm.qty.value = '';
   logForm.note.value = '';
-  logClientName.textContent = name || '—';
-  logModal.classList.remove('hidden');
+  if (logClientName) logClientName.textContent = name || '—';
+  logModal?.classList.remove('hidden');
 }
-function closeLogModal(){ logModal.classList.add('hidden'); }
+function closeLogModal(){ logModal?.classList.add('hidden'); }
 logClose?.addEventListener('click', closeLogModal);
 logCancel?.addEventListener('click', closeLogModal);
 
@@ -423,9 +462,9 @@ logForm?.addEventListener('submit', async (e)=>{
   await loadDashboard();   // refresh KPIs, chart, and table immediately
 });
 
-/* =============== Clients list (basic) =============== */
+/* =============== Clients list (used on clients.html) =============== */
 async function loadClientsList(){
-  if (!clientsTableBody) return;              // not on clients page
+  if (!clientsTableBody) return; // not on clients page
   const supabase = await getSupabase();
   if (!supabase){ clientsTableBody.innerHTML = `<tr><td class="py-4 text-sm text-gray-500">Connect Supabase (env.js).</td></tr>`; return; }
 
