@@ -15,8 +15,8 @@ function simpleStatus(remaining, dueDate){
   return 'green';
 }
 
-// Nicer color system (Tailwind-inspired), with alpha support for silky fills
-function statusColors(s, a = 0.75){
+// Tailwind-ish colors with soft alpha fills
+function statusColors(s, a = 0.72){
   const map = {
     green:  { r: 34,  g:197, b: 94,  stroke: '#16a34a' }, // green-500/600
     yellow: { r:234,  g:179, b:  8,  stroke: '#d97706' }, // amber-500/600
@@ -31,24 +31,22 @@ function statusColors(s, a = 0.75){
 }
 
 /* === Tight y-axis autoscale (bars look long) ===
-   Returns a hard max (not suggested) ~8% above the tallest bar,
-   plus a "nice" tick step.
+   Hard max ~8% above tallest bar, nice step size.
+   If all values are 0 (or empty), use a tiny axis so the chart isn’t huge.
 */
 function yScaleFor(values){
   const nums = (values || []).map(v => Number(v) || 0);
   const rawMax = Math.max(0, ...nums);
-  if (!isFinite(rawMax) || rawMax === 0) {
-    return { max: 10, stepSize: 2 };
+  if (!isFinite(rawMax) || rawMax <= 0) {
+    return { min: 0, max: 1, stepSize: 1 }; // compact axis for empty/zero data
   }
   const top = Math.ceil(rawMax * 1.08); // ~8% headroom
-  // aim ~5 ticks with "nice" steps (5/10/25/50/100/200/500/…)
-  const rough = top / 5;
+  const rough = top / 5; // aim ~5 ticks
   const pow = Math.pow(10, Math.floor(Math.log10(rough)));
   const nice = Math.ceil(rough / pow) * pow;
   const step = Math.max(5, nice);
-  // round max up to a multiple of step (keeps gridlines even)
-  const max = Math.ceil(top / step) * step;
-  return { max, stepSize: step };
+  const max = Math.ceil(top / step) * step; // round up to step multiple
+  return { min: 0, max, stepSize: step };
 }
 
 function getThisFriday(){
@@ -179,7 +177,7 @@ async function importRows(rows, supabase){
         products: (r.products||'').trim(),
         instructions: (r.instructions||'').trim(),
         start_date: r.start_date ? new Date(r.start_date).toISOString().slice(0,10) : null,
-        // New fields
+        // New fields for Rhonda
         contract_executed: String(r.contract_executed||'').toLowerCase()==='true',
         contract_date: r.contract_date ? new Date(r.contract_date).toISOString().slice(0,10) : null,
         total_lives: r.total_lives ? Number(r.total_lives) : null,
@@ -217,7 +215,7 @@ async function importRows(rows, supabase){
       client_fk,
       due_date: r.due_date ? new Date(r.due_date).toISOString().slice(0,10) : null,
       qty_due: Number(r.qty_due||0),
-      label: null  // ignored in MVP
+      label: null  // MVP ignores ongoing weekly label
     };
     if (deliverable.deliverable_id){
       const { error } = await supabase.from('deliverables').upsert(deliverable, { onConflict: 'deliverable_id' });
@@ -262,14 +260,14 @@ async function loadDashboard(){
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
   if (error){ console.error(error); return; }
 
-  // Fetch client names + contracted flag
+  // Clients
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
   const { data: clients, error: cErr } = await supabase.from('clients')
     .select('id,name,contract_executed').in('id', clientIds);
   if (cErr){ console.error(cErr); return; }
   const idTo = Object.fromEntries(clients.map(c => [c.id, c]));
 
-  // Apply "Contracted only" if set
+  // Filter: contracted only?
   const progressFiltered = filters.contractedOnly
     ? progress.filter(p => idTo[p.client_fk]?.contract_executed)
     : progress.slice();
@@ -282,7 +280,7 @@ async function loadDashboard(){
   kpiCompleted.setAttribute('value', fmt(completed));
   kpiRemaining.setAttribute('value', fmt(remaining));
 
-  // "Due This Friday" KPI + table
+  // "Due This Friday"
   const friday = getThisFriday();
   const dueFri = progressFiltered.filter(p => p.due_date === friday);
   const friTotal = dueFri.reduce((a,b)=>a+(b.qty_due||0),0);
@@ -312,7 +310,6 @@ async function loadDashboard(){
         fridayBody.appendChild(tr);
       });
     }
-    // Prevent duplicate listeners on reloads
     fridayBody.onclick = async (e)=>{
       const btn = e.target.closest('button[data-log-friday]');
       if (!btn) return;
@@ -325,17 +322,14 @@ async function loadDashboard(){
       const chunk = Math.ceil(qty / count);
       for (const d of (friDeliverables||[])){
         await supabase.from('completions').insert({
-          deliverable_fk: d.id,
-          occurred_on: friday,
-          qty_completed: chunk,
-          note: 'Dashboard Friday quick-log'
+          deliverable_fk: d.id, occurred_on: friday, qty_completed: chunk, note: 'Dashboard Friday quick-log'
         });
       }
       await loadDashboard();
     };
   }
 
-  // Upcoming Due Dates (first 10)
+  // Upcoming (first 10)
   if (dueSoonTbody){
     const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
     const sorted = progressFiltered.slice().sort((a,b)=> new Date(a.due_date)-new Date(b.due_date));
@@ -353,7 +347,6 @@ async function loadDashboard(){
       dueSoonTbody.appendChild(tr);
     });
 
-    // One-click logger (no duplicate listeners)
     dueSoonTbody.onclick = async (e)=>{
       const btn = e.target.closest('button[data-log]');
       if (!btn) return;
@@ -368,7 +361,7 @@ async function loadDashboard(){
     };
   }
 
-  // ===== Bar Chart: Remaining by Client (Top 10) =====
+  // ===== Bar: Remaining by Client (Top 10) =====
   const agg = {};
   for (const p of progressFiltered) {
     agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
@@ -386,7 +379,7 @@ async function loadDashboard(){
   const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
   const values = ranked.map(([,v]) => v);
   const yCfg = yScaleFor(values);
-  const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.72).fill);
+  const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green').fill);
   const borders= ranked.map(([id]) => statusColors(worstByClient[id] || 'green').stroke);
   const hovers = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.88).hover);
 
@@ -412,7 +405,7 @@ async function loadDashboard(){
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: { duration: 600, easing: 'easeOutCubic' },
+        animation: { duration: 500, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
           tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
@@ -420,8 +413,8 @@ async function loadDashboard(){
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: {
-            beginAtZero: true,
-            max: yCfg.max,                  // <-- hard cap (tight)
+            min: yCfg.min,
+            max: yCfg.max,
             ticks: { stepSize: yCfg.stepSize },
             grid: { color: 'rgba(17,24,39,0.08)' }
           }
@@ -531,8 +524,7 @@ async function loadClientDetail(){
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
 
-    const color = statusColors(status, 0.72);
-
+    const color = statusColors(status);
     labels.push(d.due_date);
     values.push(remaining);
     fills.push(color.fill);
@@ -573,7 +565,7 @@ async function loadClientDetail(){
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: { duration: 600, easing: 'easeOutCubic' },
+        animation: { duration: 500, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
           tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
@@ -581,8 +573,8 @@ async function loadClientDetail(){
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: {
-            beginAtZero: true,
-            max: yCfg.max,                  // <-- hard cap (tight)
+            min: yCfg.min,
+            max: yCfg.max,                 // tight cap
             ticks: { stepSize: yCfg.stepSize },
             grid: { color: 'rgba(17,24,39,0.08)' }
           }
@@ -591,7 +583,7 @@ async function loadClientDetail(){
     });
   }
 
-  // One-click logger (no duplicate listeners)
+  // One-click logger
   deliverablesBody.onclick = async (e)=>{
     const btn = e.target.closest('button[data-log]'); if (!btn) return;
     const deliverableId = btn.getAttribute('data-log');
@@ -612,5 +604,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: scale-tight');
+  console.log('Deliverables script build: scale-tight v2');
 });
