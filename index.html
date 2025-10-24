@@ -47,10 +47,10 @@
           <span class="text-sm text-gray-500">Mon–Fri (EST)</span>
         </div>
 
-        <!-- Fixed height to prevent the chart from growing too tall -->
-        <div id="allClientsScroller" class="overflow-x-auto" style="height: 360px;">
-          <div style="min-width: 1100px; height: 100%;">
-            <canvas id="byClientChart" style="height:100%;"></canvas>
+        <!-- Fixed height + horizontal scroll -->
+        <div id="allClientsScroller" class="overflow-x-auto" style="height:360px;">
+          <div id="chartWidth" style="min-width:1100px;height:100%;">
+            <canvas id="byClientChart" style="height:100%;display:block;"></canvas>
           </div>
         </div>
       </section>
@@ -111,8 +111,8 @@
   </div>
 
   <!-- App (modules) -->
-  <script type="module" src="./env.js?v=weekly-fix-1"></script>
-  <script type="module" src="./supabaseClient.js?v=weekly-fix-1"></script>
-  <script type="module" src="./script.js?v=weekly-fix-1"></script>
+  <script type="module" src="./env.js?v=weekly-fix-3"></script>
+  <script type="module" src="./supabaseClient.js?v=weekly-fix-3"></script>
+  <script type="module" src="./script.js?v=weekly-fix-3"></script>
 </body>
 </html>
