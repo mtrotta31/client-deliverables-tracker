@@ -21,14 +21,23 @@
 
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
-      <h1 class="text-2xl font-semibold">Dashboard</h1>
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-semibold">Dashboard</h1>
+        <label class="text-sm inline-flex items-center gap-2">
+          <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
+          <span>Contracted only</span>
+        </label>
+      </div>
 
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
+      <!-- KPIs -->
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-6">
         <kpi-card id="kpi-total" label="Total Due" value="—"></kpi-card>
         <kpi-card id="kpi-completed" label="Completed" value="—"></kpi-card>
         <kpi-card id="kpi-remaining" label="Remaining" value="—"></kpi-card>
+        <kpi-card id="kpi-friday" label="Due This Friday" value="—"></kpi-card>
       </div>
 
+      <!-- CSV Importer -->
       <section class="mt-10">
         <div class="card">
           <div class="flex items-center justify-between">
@@ -50,6 +59,8 @@
                   <th>client_name</th>
                   <th>due_date</th>
                   <th>qty_due</th>
+                  <th>contract_executed</th>
+                  <th>total_lives</th>
                 </tr>
               </thead>
               <tbody id="previewTbody"></tbody>
@@ -58,6 +69,7 @@
         </div>
       </section>
 
+      <!-- Work by Client (Remaining) -->
       <section class="mt-10">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold">Work by Client (Remaining)</h2>
@@ -68,11 +80,31 @@
         </div>
       </section>
 
+      <!-- Due this Friday (by client) -->
       <section class="mt-10">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Upcoming Due Dates</h2>
+          <h2 class="text-lg font-semibold">Due This Friday — By Client</h2>
           <a class="text-sm text-indigo-600 hover:underline" href="./clients.html">View all clients</a>
         </div>
+        <div class="card mt-4 overflow-auto">
+          <table>
+            <thead>
+              <tr class="text-xs text-gray-500">
+                <th>Client</th>
+                <th>Qty Due (Fri)</th>
+                <th>Remaining</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="friday-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Upcoming due dates (general) -->
+      <section class="mt-10">
+        <h2 class="text-lg font-semibold">Upcoming Due Dates</h2>
         <div class="card mt-4 overflow-auto">
           <table>
             <thead>
