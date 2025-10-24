@@ -14,6 +14,7 @@ function simpleStatus(remaining, dueDate){
   if (need > 100) return 'yellow';
   return 'green';
 }
+
 // Nicer color system (Tailwind-inspired), with alpha support for silky fills
 function statusColors(s, a = 0.75){
   const map = {
@@ -28,20 +29,28 @@ function statusColors(s, a = 0.75){
     hover: `rgba(${k.r}, ${k.g}, ${k.b}, ${Math.min(1, a + 0.15)})`,
   };
 }
-// Keep bars tall: compute a "nice" y-axis for a given dataset
+
+/* === Tight y-axis autoscale (bars look long) ===
+   Returns a hard max (not suggested) ~8% above the tallest bar,
+   plus a "nice" tick step.
+*/
 function yScaleFor(values){
-  const max = Math.max(0, ...(values || [0]));
-  if (!isFinite(max) || max === 0) {
-    return { suggestedMax: 10, stepSize: 2, grace: '0%' };
+  const nums = (values || []).map(v => Number(v) || 0);
+  const rawMax = Math.max(0, ...nums);
+  if (!isFinite(rawMax) || rawMax === 0) {
+    return { max: 10, stepSize: 2 };
   }
-  // Aim for ~4–6 ticks with a "nice" step (25/50/100/200/500/etc)
-  const roughStep = Math.ceil(max / 4);
-  const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
-  const step = Math.max(25, Math.ceil(roughStep / pow) * pow);
-  // ~15% headroom so bars look longer without clipping
-  const suggestedMax = Math.ceil((max * 1.15) / step) * step;
-  return { suggestedMax, stepSize: step, grace: '0%' };
+  const top = Math.ceil(rawMax * 1.08); // ~8% headroom
+  // aim ~5 ticks with "nice" steps (5/10/25/50/100/200/500/…)
+  const rough = top / 5;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const nice = Math.ceil(rough / pow) * pow;
+  const step = Math.max(5, nice);
+  // round max up to a multiple of step (keeps gridlines even)
+  const max = Math.ceil(top / step) * step;
+  return { max, stepSize: step };
 }
+
 function getThisFriday(){
   const d = new Date();
   const day = d.getDay(); // 0 Sun ... 5 Fri
@@ -359,13 +368,11 @@ async function loadDashboard(){
     };
   }
 
-  // ===== Bar Chart: Remaining by Client (Top 10) with silky colors & rounded bars =====
-  // Aggregate remaining by client
+  // ===== Bar Chart: Remaining by Client (Top 10) =====
   const agg = {};
   for (const p of progressFiltered) {
     agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
   }
-  // Determine worst status per client
   const worstByClient = {};
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
@@ -375,7 +382,6 @@ async function loadDashboard(){
       : (current === 'yellow' || s === 'yellow') ? 'yellow'
       : 'green';
   }
-  // Sort and take top 10
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
   const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
   const values = ranked.map(([,v]) => v);
@@ -409,16 +415,13 @@ async function loadDashboard(){
         animation: { duration: 600, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            padding: 10,
-            callbacks: { label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}` }
-          }
+          tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: {
             beginAtZero: true,
-            suggestedMax: yCfg.suggestedMax,
+            max: yCfg.max,                  // <-- hard cap (tight)
             ticks: { stepSize: yCfg.stepSize },
             grid: { color: 'rgba(17,24,39,0.08)' }
           }
@@ -573,16 +576,13 @@ async function loadClientDetail(){
         animation: { duration: 600, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            padding: 10,
-            callbacks: { label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}` }
-          }
+          tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: {
             beginAtZero: true,
-            suggestedMax: yCfg.suggestedMax,
+            max: yCfg.max,                  // <-- hard cap (tight)
             ticks: { stepSize: yCfg.stepSize },
             grid: { color: 'rgba(17,24,39,0.08)' }
           }
@@ -612,5 +612,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: RYG-UI-v3');
+  console.log('Deliverables script build: scale-tight');
 });
