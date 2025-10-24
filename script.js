@@ -1,4 +1,4 @@
-// script.js — Weekly model, Add Client UI, all-clients chart (Mon–Fri EST)
+// script.js — Weekly model + Due This Week + Log modal + Add Client UI
 import { getSupabase } from './supabaseClient.js';
 
 /* ================= Utilities ================= */
@@ -20,10 +20,9 @@ function fridayEndOf(monday) {
   return f;
 }
 function daysLeftThisWeek(today){
-  // Mon..Fri working days remaining including today
   const dow = today.getDay();          // Mon=1 ... Fri=5
-  if (dow === 6 || dow === 0) return 5; // weekend seen early
-  return Math.max(1, 6 - dow);         // e.g., Tue=2 -> 4 days left
+  if (dow === 6 || dow === 0) return 5;
+  return Math.max(1, 6 - dow);
 }
 function yScaleFor(values, pad=0.06){
   const nums = (values||[]).map(v=>+v||0);
@@ -82,11 +81,17 @@ const barPercentPlugin = {
 const kpiTotal     = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
-const fridayBody   = document.querySelector('#friday-body');
-const dueSoonBody  = document.querySelector('#due-soon-body') || document.querySelector('#upcomingBody');
+const dueBody      = document.querySelector('#dueThisWeekBody');
 let byClientChart;
 
-/* Add Client modal refs */
+/* Log modal */
+const logModal = document.getElementById('logModal');
+const logForm  = document.getElementById('logForm');
+const logClose = document.getElementById('logClose');
+const logCancel= document.getElementById('logCancel');
+const logClientName = document.getElementById('logClientName');
+
+/* Add Client modal (from previous round) */
 const modal = document.getElementById('clientModal');
 const modalTitle = document.getElementById('clientModalTitle');
 const btnOpen = document.getElementById('btnAddClient');
@@ -101,15 +106,17 @@ const btnAddAddr = document.getElementById('btnAddAddr');
 const btnAddEmr  = document.getElementById('btnAddEmr');
 const clientsTableBody = document.getElementById('clientsBody');
 
-/* =============== Add/Edit Client UI =============== */
+/* =============== Add/Edit Client UI (unchanged) =============== */
 function openClientModal(edit=null){
   if (!modal) return;
   modal.classList.remove('hidden');
   modalTitle.textContent = edit ? 'Edit Client' : 'Add Client';
   clientForm.reset();
   clientForm.client_id.value = edit?.id || '';
-  addressesList.innerHTML = ''; emrsList.innerHTML = '';
-  addAddressRow(); addEmrRow();
+  addressesList && (addressesList.innerHTML = '');
+  emrsList && (emrsList.innerHTML = '');
+  if (addressesList) addAddressRow();
+  if (emrsList) addEmrRow();
   if (edit){
     clientForm.name.value = edit.name||'';
     clientForm.total_lives.value = edit.total_lives||'';
@@ -120,7 +127,7 @@ function openClientModal(edit=null){
 }
 function closeClientModal(){ modal?.classList.add('hidden'); }
 function addAddressRow(a={}){
-  if (!addrTpl) return;
+  if (!addrTpl || !addressesList) return;
   const node = addrTpl.content.cloneNode(true);
   const row = node.querySelector('.grid');
   row.querySelector('[name=line1]').value = a.line1||'';
@@ -132,7 +139,7 @@ function addAddressRow(a={}){
   addressesList.appendChild(node);
 }
 function addEmrRow(e={}){
-  if (!emrTpl) return;
+  if (!emrTpl || !emrsList) return;
   const node = emrTpl.content.cloneNode(true);
   const row = node.querySelector('.grid');
   row.querySelector('[name=vendor]').value  = e.vendor||'';
@@ -173,39 +180,36 @@ clientForm?.addEventListener('submit', async (e)=>{
   }
 
   // addresses
-  const addrs = [...addressesList.querySelectorAll('.grid')].map(r=>({
-    client_fk: clientId,
-    line1:  r.querySelector('[name=line1]').value.trim() || null,
-    line2:  r.querySelector('[name=line2]').value.trim() || null,
-    city:   r.querySelector('[name=city]').value.trim()  || null,
-    state:  r.querySelector('[name=state]').value.trim() || null,
-    zip:    r.querySelector('[name=zip]').value.trim()   || null,
-  })).filter(a=>a.line1);
-  if (addrs.length) await supabase.from('client_addresses').insert(addrs);
+  if (addressesList) {
+    const addrs = [...addressesList.querySelectorAll('.grid')].map(r=>({
+      client_fk: clientId,
+      line1:  r.querySelector('[name=line1]').value.trim() || null,
+      line2:  r.querySelector('[name=line2]').value.trim() || null,
+      city:   r.querySelector('[name=city]').value.trim()  || null,
+      state:  r.querySelector('[name=state]').value.trim() || null,
+      zip:    r.querySelector('[name=zip]').value.trim()   || null,
+    })).filter(a=>a.line1);
+    if (addrs.length) await supabase.from('client_addresses').insert(addrs);
+  }
 
   // emrs
-  const emrs = [...emrsList.querySelectorAll('.grid')].map(r=>({
-    client_fk: clientId,
-    vendor:  r.querySelector('[name=vendor]').value.trim(),
-    details: r.querySelector('[name=details]').value.trim() || null
-  })).filter(e=>e.vendor);
-  if (emrs.length) await supabase.from('client_emrs').insert(emrs);
+  if (emrsList) {
+    const emrs = [...emrsList.querySelectorAll('.grid')].map(r=>({
+      client_fk: clientId,
+      vendor:  r.querySelector('[name=vendor]').value.trim(),
+      details: r.querySelector('[name=details]').value.trim() || null
+    })).filter(e=>e.vendor);
+    if (emrs.length) await supabase.from('client_emrs').insert(emrs);
+  }
 
   // optional commitment
-  const weekly_qty = Number(clientForm.weekly_qty.value||0);
-  const start_week = clientForm.start_week.value ? new Date(clientForm.start_week.value) : null;
+  const weekly_qty = Number(clientForm.weekly_qty?.value||0);
+  const start_week = clientForm.start_week?.value ? new Date(clientForm.start_week.value) : null;
   if (weekly_qty && start_week){
-    // normalize to Monday
     const mon = mondayOf(start_week);
     const iso = mon.toISOString().slice(0,10);
-    // deactivate existing client-level actives
-    await supabase.from('weekly_commitments')
-      .update({ active:false })
-      .eq('client_fk', clientId)
-      .eq('active', true);
-    await supabase.from('weekly_commitments').insert({
-      client_fk: clientId, weekly_qty, start_week: iso, active: true
-    });
+    await supabase.from('weekly_commitments').update({ active:false }).eq('client_fk', clientId).eq('active', true);
+    await supabase.from('weekly_commitments').insert({ client_fk: clientId, weekly_qty, start_week: iso, active:true });
   }
 
   closeClientModal();
@@ -233,7 +237,8 @@ async function loadDashboard(){
   const lastFri = fridayEndOf(lastMon);
   const lastMonISO = lastMon.toISOString().slice(0,10);
 
-  // commitment lookup (client-level first; site-level UI next phase)
+  const contractedOnly = document.getElementById('filterContracted')?.checked ?? true;
+
   const latestQtyFor = (clientId, weekISO)=>{
     const rows = wk.filter(r => r.client_fk===clientId && r.active && r.start_week <= weekISO)
                    .sort((a,b)=> b.start_week.localeCompare(a.start_week));
@@ -248,26 +253,28 @@ async function loadDashboard(){
       return sum;
     }, 0);
 
-  const rows = (clients||[]).map(c=>{
-    const qtyThis  = latestQtyFor(c.id, monISO);
-    const qtyLast  = latestQtyFor(c.id, lastMonISO);
-    const doneLast = completedForWeek(c.id, lastMon, lastFri);
-    const carryIn  = qtyLast - doneLast;                 // may be negative (overage)
-    const required = Math.max(0, qtyThis + carryIn);     // don’t go below 0
-    const doneThis = completedForWeek(c.id, mon, fri);
-    const remaining= Math.max(0, required - doneThis);
+  const rows = (clients||[])
+    .filter(c => !contractedOnly || c.contract_executed)
+    .map(c=>{
+      const qtyThis  = latestQtyFor(c.id, monISO);
+      const qtyLast  = latestQtyFor(c.id, lastMonISO);
+      const doneLast = completedForWeek(c.id, lastMon, lastFri);
+      const carryIn  = qtyLast - doneLast;                 // may be negative (overage)
+      const required = Math.max(0, qtyThis + carryIn);     // don’t go below 0
+      const doneThis = completedForWeek(c.id, mon, fri);
+      const remaining= Math.max(0, required - doneThis);
 
-    // status: RED if last week had positive carry (missed); else YELLOW if behind pace
-    const needPerDay = remaining / Math.max(1, daysLeftThisWeek(today));
-    const status = carryIn > 0 ? 'red' : (needPerDay > 100 ? 'yellow' : 'green');
+      // status: RED if last week had positive carry; else YELLOW if behind pace
+      const needPerDay = remaining / Math.max(1, daysLeftThisWeek(today));
+      const status = carryIn > 0 ? 'red' : (needPerDay > 100 ? 'yellow' : 'green');
 
-    return {
-      id: c.id,
-      name: c.name,
-      weekly_qty: qtyThis,
-      carryIn, required, doneThis, remaining, status
-    };
-  });
+      return {
+        id: c.id,
+        name: c.name,
+        weekly_qty: qtyThis,
+        carryIn, required, doneThis, remaining, status
+      };
+    });
 
   // KPIs (this week)
   const totalRequired = rows.reduce((s,r)=> s + r.required, 0);
@@ -277,7 +284,14 @@ async function loadDashboard(){
   kpiCompleted?.setAttribute('value', fmt(totalDone));
   kpiRemaining?.setAttribute('value', fmt(totalRemain));
 
-  // Build all-clients stacked bar with horizontal scroll
+  // Chart
+  renderByClientChart(rows);
+
+  // Due this week table
+  renderDueThisWeek(rows);
+}
+
+function renderByClientChart(rows){
   const labels    = rows.map(r=> r.name);
   const completes = rows.map(r=> Math.max(0, r.required - r.remaining));
   const remains   = rows.map(r=> r.remaining);
@@ -290,60 +304,128 @@ async function loadDashboard(){
   const remHovers  = statuses.map(s=> statusColors(s).hover);
   const remBorders = statuses.map(s=> statusColors(s).stroke);
 
+  // width per bar; height is fixed by HTML (360px)
   const widthPx = Math.max(1100, labels.length * 140);
-  const scroller = document.querySelector('#allClientsScroller canvas');
-  if (scroller) scroller.style.width = widthPx + 'px';
+  const canvas = document.getElementById('byClientChart');
+  if (canvas) canvas.style.width = widthPx + 'px';
 
   const totalsForAxis = labels.map((_,i)=> completes[i]+remains[i]);
   const yCfg = yScaleFor(totalsForAxis, 0.05);
 
   if (byClientChart) byClientChart.destroy();
-  const ctx = document.getElementById('byClientChart')?.getContext('2d');
-  if (ctx && window.Chart){
-    byClientChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [
-          { label:'Completed', data: completes, backgroundColor: compFill, hoverBackgroundColor: compHover, borderColor: compBorder, borderWidth: 1, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' },
-          { label:'Remaining', data: remains,   backgroundColor: remFills, hoverBackgroundColor: remHovers, borderColor: remBorders, borderWidth: 1.5, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' }
-        ]
-      },
-      options: {
-        responsive:true, maintainAspectRatio:false, animation:{ duration: 450 },
-        plugins:{
-          legend:{ display:true },
-          tooltip:{
-            padding:12, displayColors:false,
-            callbacks:{
-              title:(items)=> labels[items[0].dataIndex] || '',
-              label:(ctx)=> `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
-              afterBody:(items)=>{
-                const i = items[0].dataIndex;
-                const total = completes[i] + remains[i];
-                const pct = Math.round(completes[i]/Math.max(1,total)*100);
-                return [
-                  `Total this week: ${fmt(total)}`,
-                  `Last week carry: ${fmt(rows[i].carryIn)}`,
-                  `Percent complete: ${pct}%`
-                ];
-              }
+  const ctx = canvas?.getContext('2d');
+  if (!ctx || !window.Chart) return;
+
+  byClientChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label:'Completed', data: completes,
+          backgroundColor: compFill, hoverBackgroundColor: compHover,
+          borderColor: compBorder, borderWidth: 1, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' },
+        { label:'Remaining', data: remains,
+          backgroundColor: remFills, hoverBackgroundColor: remHovers,
+          borderColor: remBorders, borderWidth: 1.5, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false, animation:{ duration: 400 },
+      plugins:{
+        legend:{ display:true },
+        tooltip:{
+          padding:12, displayColors:false,
+          callbacks:{
+            title:(items)=> labels[items[0].dataIndex] || '',
+            label:(ctx)=> `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
+            afterBody:(items)=>{
+              const i = items[0].dataIndex;
+              const total = completes[i] + remains[i];
+              const pct = Math.round(completes[i]/Math.max(1,total)*100);
+              return [
+                `Total this week: ${fmt(total)}`,
+                `Last week carry: ${fmt(rows[i].carryIn)}`,
+                `Percent complete: ${pct}%`
+              ];
             }
           }
-        },
-        scales:{
-          x:{ stacked:true, grid:{display:false}, ticks:{ autoSkip:false, maxRotation:0, minRotation:0, font:{size:11} } },
-          y:{ stacked:true, min:yCfg.min, max:yCfg.max, ticks:{ stepSize:yCfg.stepSize }, grid:{ color:'rgba(17,24,39,0.08)' } }
         }
       },
-      plugins: [barPercentPlugin]
-    });
-  }
+      scales:{
+        x:{ stacked:true, grid:{display:false}, ticks:{ autoSkip:false, maxRotation:0, minRotation:0, font:{size:11} } },
+        y:{ stacked:true, min:yCfg.min, max:yCfg.max, ticks:{ stepSize:yCfg.stepSize }, grid:{ color:'rgba(17,24,39,0.08)' } }
+      }
+    },
+    plugins: [barPercentPlugin]
+  });
 }
 
-/* =============== Clients list (name + lives + commitment) =============== */
+function renderDueThisWeek(rows){
+  if (!dueBody) return;
+  // show clients with required > 0, sorted by remaining desc
+  const items = rows.filter(r=> r.required>0).sort((a,b)=> b.remaining - a.remaining);
+  if (!items.length){
+    dueBody.innerHTML = `<tr><td colspan="6" class="py-4 text-sm text-gray-500">No active commitments this week.</td></tr>`;
+    return;
+  }
+  dueBody.innerHTML = items.map(r=>{
+    const done = Math.max(0, r.required - r.remaining);
+    return `
+      <tr>
+        <td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${r.id}">${r.name}</a></td>
+        <td class="text-sm">${fmt(r.required)}</td>
+        <td class="text-sm">${fmt(done)}</td>
+        <td class="text-sm">${fmt(r.remaining)}</td>
+        <td class="text-sm"><status-badge status="${r.status}"></status-badge></td>
+        <td class="text-sm">
+          <button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${r.id}" data-name="${r.name}">Log</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  // attach log button handler (event delegation)
+  dueBody.onclick = (e)=>{
+    const btn = e.target.closest('button[data-log]');
+    if (!btn) return;
+    openLogModal(btn.getAttribute('data-log'), btn.getAttribute('data-name'));
+  };
+}
+
+/* =============== Log completion modal =============== */
+function openLogModal(clientId, name){
+  logForm.client_id.value = clientId;
+  logForm.qty.value = '';
+  logForm.note.value = '';
+  logClientName.textContent = name || '—';
+  logModal.classList.remove('hidden');
+}
+function closeLogModal(){ logModal.classList.add('hidden'); }
+logClose?.addEventListener('click', closeLogModal);
+logCancel?.addEventListener('click', closeLogModal);
+
+logForm?.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const supabase = await getSupabase();
+  if (!supabase) return alert('Supabase not configured.');
+  const qty = Number(logForm.qty.value||0);
+  if (!qty || qty < 1) return alert('Enter a valid quantity.');
+
+  const payload = {
+    client_fk: logForm.client_id.value,
+    occurred_on: new Date().toISOString(),     // today
+    qty_completed: qty,
+    note: logForm.note.value?.trim() || null
+  };
+  const { error } = await supabase.from('completions').insert(payload);
+  if (error){ console.error(error); return alert('Failed to log completion.'); }
+
+  closeLogModal();
+  await loadDashboard();   // refresh KPIs, chart, and table immediately
+});
+
+/* =============== Clients list (basic) =============== */
 async function loadClientsList(){
-  if (!clientsTableBody) return;
+  if (!clientsTableBody) return;              // not on clients page
   const supabase = await getSupabase();
   if (!supabase){ clientsTableBody.innerHTML = `<tr><td class="py-4 text-sm text-gray-500">Connect Supabase (env.js).</td></tr>`; return; }
 
@@ -381,7 +463,7 @@ async function loadClientsList(){
   };
 }
 
-/* =============== Client detail (basic: table + remaining-by-week later) =============== */
+/* =============== Client detail (placeholder; timeline next round) =============== */
 async function loadClientDetail(){
   const nameEl = document.getElementById('clientName');
   if (!nameEl) return; // not on detail page
@@ -390,14 +472,15 @@ async function loadClientDetail(){
 
   const { data: client } = await supabase.from('clients').select('*').eq('id', id).single();
   nameEl.textContent = client?.name || 'Client';
-
-  // (Timeline chart by week can be added next; core weekly model is live on dashboard)
 }
 
 /* =============== Boot =============== */
 window.addEventListener('DOMContentLoaded', ()=>{
+  const filter = document.getElementById('filterContracted');
+  filter?.addEventListener('change', loadDashboard);
+
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Weekly build loaded');
+  console.log('Dashboard weekly build loaded');
 });
