@@ -14,24 +14,39 @@
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
+
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
-      <h1 class="text-2xl font-semibold">Clients</h1>
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-semibold">Clients</h1>
+        <label class="text-sm inline-flex items-center gap-2">
+          <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
+          <span>Contracted only</span>
+        </label>
+      </div>
+
       <div class="card mt-6 overflow-auto">
         <table>
           <thead>
             <tr class="text-xs text-gray-500">
               <th>Name</th>
-              <th>Start Date</th>
+              <th>Total Lives</th>
+              <th>First Due</th>
+              <th>First Qty</th>
+              <th>Next Roster Pull</th>
               <th>Status</th>
             </tr>
           </thead>
-          <tbody id="clientsBody"><tr><td colspan="3" class="text-sm text-gray-500 py-4">Loading…</td></tr></tbody>
+          <tbody id="clientsBody">
+            <tr><td colspan="6" class="text-sm text-gray-500 py-4">Loading…</td></tr>
+          </tbody>
         </table>
       </div>
     </div>
   </main>
+
   <app-footer></app-footer>
+
   <script type="module" src="./env.js"></script>
   <script type="module" src="./supabaseClient.js"></script>
   <script type="module" src="./script.js"></script>
