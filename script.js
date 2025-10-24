@@ -31,39 +31,32 @@ function statusColors(s, a = 0.72){
 }
 
 /* === Tight y-axis autoscale (bars look long) ===
-   Hard max slightly above tallest bar, nice step size.
-   If all values are 0 (or empty), use a tiny axis so the chart isn’t huge.
+   If all values are 0/empty, keep the axis tiny.
 */
-function yScaleFor(values, headroom = 0.06){  // default ~6% headroom
+function yScaleFor(values, headroom = 0.06){
   const nums = (values || []).map(v => Number(v) || 0);
   const rawMax = Math.max(0, ...nums);
-  if (!isFinite(rawMax) || rawMax <= 0) {
-    return { min: 0, max: 1, stepSize: 1 };
-  }
+  if (!isFinite(rawMax) || rawMax <= 0) return { min: 0, max: 1, stepSize: 1 };
   const top = Math.ceil(rawMax * (1 + headroom));
-  const rough = top / 5; // aim ~5 ticks
+  const rough = top / 5; // ~5 ticks
   const pow = Math.pow(10, Math.floor(Math.log10(rough)));
   const nice = Math.ceil(rough / pow) * pow;
   const step = Math.max(5, nice);
-  const max = Math.ceil(top / step) * step; // round up to step multiple
+  const max = Math.ceil(top / step) * step;
   return { min: 0, max, stepSize: step };
 }
 
 function getThisFriday(){
   const d = new Date();
-  const day = d.getDay(); // 0 Sun ... 5 Fri
-  const diff = (5 - day + 7) % 7;
+  const diff = (5 - d.getDay() + 7) % 7;
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0,10);
 }
 
-/* Small helper to lock canvas pixel height (prevents runaway tall charts) */
+// Lock canvas pixel height (prevents runaway tall charts)
 function setCanvasHeight(id, px){
   const el = document.getElementById(id);
-  if (el) {
-    el.height = px;                 // Chart.js respects element height when maintainAspectRatio=false
-    el.style.maxHeight = px + 'px'; // belt & suspenders
-  }
+  if (el) { el.height = px; el.style.maxHeight = px + 'px'; }
 }
 
 /* =========================
@@ -92,7 +85,11 @@ const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const kpiFriday = document.querySelector('#kpi-friday');
-const dueSoonTbody = document.querySelector('#due-soon-body');
+// Robust selector for Upcoming table body (covers legacy IDs)
+const dueSoonTbody =
+  document.querySelector('#due-soon-body') ||
+  document.querySelector('#upcomingBody') ||
+  document.querySelector('[data-role="due-soon-body"]');
 const fridayBody = document.querySelector('#friday-body');
 let byClientChart;
 
@@ -332,30 +329,78 @@ async function loadDashboard(){
     };
   }
 
+  /* ==== Upcoming Due Dates (fixed) ==== */
+  if (dueSoonTbody){
+    const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
+    dueSoonTbody.innerHTML = '';
+
+    const todayISO = new Date().toISOString().slice(0,10);
+    const upcoming = progressFiltered
+      .filter(p => p.due_date >= todayISO) // future only
+      .sort((a,b)=> new Date(a.due_date) - new Date(b.due_date))
+      .slice(0,10);
+
+    if (!upcoming.length){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="6" class="py-4 text-sm text-gray-500">No upcoming due dates.</td>`;
+      dueSoonTbody.appendChild(tr);
+    } else {
+      upcoming.forEach(p=>{
+        const status = simpleStatus(p.remaining_to_due, p.due_date);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="py-2 pr-6 text-sm">
+            <a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${p.client_fk}">
+              ${idToName[p.client_fk] || '—'}
+            </a>
+          </td>
+          <td class="py-2 pr-6 text-sm">${p.due_date}</td>
+          <td class="py-2 pr-6 text-sm">${fmt(p.qty_due)}</td>
+          <td class="py-2 pr-6 text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
+          <td class="py-2 pr-6 text-sm"><status-badge status="${status}"></status-badge></td>
+          <td class="py-2 pr-6 text-sm">
+            <button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button>
+          </td>`;
+        dueSoonTbody.appendChild(tr);
+      });
+
+      // Quick log handler (attach once)
+      dueSoonTbody.onclick = async (e)=>{
+        const supabase = await getSupabase();
+        const btn = e.target.closest('button[data-log]');
+        if (!btn || !supabase) return;
+        const deliverableId = btn.getAttribute('data-log');
+        const qty = Number(prompt('Qty completed?'));
+        if (!qty || qty <= 0) return;
+        const occurred = new Date().toISOString().slice(0,10);
+        const { error } = await supabase.from('completions').insert({
+          deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty
+        });
+        if (error){ alert('Failed to log completion.'); console.error(error); return; }
+        await loadDashboard();
+      };
+    }
+  }
+
   // ===== Dashboard bar: Remaining by Client (Top 10) =====
   const agg = {};
-  for (const p of progressFiltered) {
-    agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
-  }
+  for (const p of progressFiltered) agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
   const worstByClient = {};
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
-    const current = worstByClient[p.client_fk] || 'green';
-    worstByClient[p.client_fk] =
-      (current === 'red' || s === 'red') ? 'red'
-      : (current === 'yellow' || s === 'yellow') ? 'yellow'
-      : 'green';
+    const cur = worstByClient[p.client_fk] || 'green';
+    worstByClient[p.client_fk] = (cur === 'red' || s === 'red') ? 'red'
+      : (cur === 'yellow' || s === 'yellow') ? 'yellow' : 'green';
   }
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
-  const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
+  const labels = ranked.map(([id]) => idTo[id]?.name || '—');
   const values = ranked.map(([,v]) => v);
-  const yCfg = yScaleFor(values, 0.05); // tighter headroom on dashboard
+  const yCfg = yScaleFor(values, 0.05); // tight headroom on dashboard
   const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green').fill);
   const borders= ranked.map(([id]) => statusColors(worstByClient[id] || 'green').stroke);
   const hovers = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.88).hover);
 
-  // Make dashboard bars nice and tall but controlled
-  setCanvasHeight('byClientChart', 280);
+  setCanvasHeight('byClientChart', 280); // tall but controlled
 
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
@@ -386,12 +431,7 @@ async function loadDashboard(){
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: {
-            min: yCfg.min,
-            max: yCfg.max,
-            ticks: { stepSize: yCfg.stepSize },
-            grid: { color: 'rgba(17,24,39,0.08)' }
-          }
+          y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
         }
       }
     });
@@ -438,7 +478,6 @@ async function loadClientsList(){
       firstDue = delivs[0].due_date;
       firstQty = fmt(delivs[0].qty_due);
 
-      // status window: next 14 days
       const windowed = delivs.filter(d => d.due_date >= toISO(today) && d.due_date <= toISO(in14));
       let worst = 'green';
       for (const d of windowed){
@@ -516,9 +555,8 @@ async function loadClientDetail(){
     deliverablesBody.appendChild(tr);
   }
 
-  // Lock a small height so the chart can't break the layout
-  setCanvasHeight('clientDueChart', 220);
-  const yCfg = yScaleFor(values, 0.08); // a touch more headroom on detail
+  setCanvasHeight('clientDueChart', 220);             // compact, never breaks layout
+  const yCfg = yScaleFor(values, 0.08);               // a touch more headroom
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
@@ -540,26 +578,17 @@ async function loadClientDetail(){
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false, // use explicit pixel height above
+        maintainAspectRatio: false,
         animation: { duration: 450, easing: 'easeOutCubic' },
-        plugins: {
-          legend: { display: false },
-          tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
-        },
+        plugins: { legend: { display: false }, tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } } },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: {
-            min: yCfg.min,
-            max: yCfg.max,
-            ticks: { stepSize: yCfg.stepSize },
-            grid: { color: 'rgba(17,24,39,0.08)' }
-          }
+          y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
         }
       }
     });
   }
 
-  // One-click logger
   deliverablesBody.onclick = async (e)=>{
     const btn = e.target.closest('button[data-log]'); if (!btn) return;
     const deliverableId = btn.getAttribute('data-log');
@@ -580,5 +609,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: refresh3');
+  console.log('Deliverables script build: ud3');
 });
