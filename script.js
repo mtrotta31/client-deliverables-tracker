@@ -14,10 +14,8 @@ function simpleStatus(remaining, dueDate){
   if (need > 100) return 'yellow';
   return 'green';
 }
-
 // Nicer color system (Tailwind-inspired), with alpha support for silky fills
 function statusColors(s, a = 0.75){
-  // base colors chosen for good contrast on white backgrounds
   const map = {
     green:  { r: 34,  g:197, b: 94,  stroke: '#16a34a' }, // green-500/600
     yellow: { r:234,  g:179, b:  8,  stroke: '#d97706' }, // amber-500/600
@@ -30,7 +28,20 @@ function statusColors(s, a = 0.75){
     hover: `rgba(${k.r}, ${k.g}, ${k.b}, ${Math.min(1, a + 0.15)})`,
   };
 }
-
+// Keep bars tall: compute a "nice" y-axis for a given dataset
+function yScaleFor(values){
+  const max = Math.max(0, ...(values || [0]));
+  if (!isFinite(max) || max === 0) {
+    return { suggestedMax: 10, stepSize: 2, grace: '0%' };
+  }
+  // Aim for ~4–6 ticks with a "nice" step (25/50/100/200/500/etc)
+  const roughStep = Math.ceil(max / 4);
+  const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
+  const step = Math.max(25, Math.ceil(roughStep / pow) * pow);
+  // ~15% headroom so bars look longer without clipping
+  const suggestedMax = Math.ceil((max * 1.15) / step) * step;
+  return { suggestedMax, stepSize: step, grace: '0%' };
+}
 function getThisFriday(){
   const d = new Date();
   const day = d.getDay(); // 0 Sun ... 5 Fri
@@ -52,7 +63,7 @@ function bindContractedCheckbox(){
   cb.onchange = ()=>{
     filters.contractedOnly = cb.checked;
     localStorage.setItem('contractedOnly', JSON.stringify(filters.contractedOnly));
-    loadDashboard(); 
+    loadDashboard();
     loadClientsList();
   };
 }
@@ -368,6 +379,7 @@ async function loadDashboard(){
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
   const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
   const values = ranked.map(([,v]) => v);
+  const yCfg = yScaleFor(values);
   const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.72).fill);
   const borders= ranked.map(([id]) => statusColors(worstByClient[id] || 'green').stroke);
   const hovers = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.88).hover);
@@ -399,14 +411,17 @@ async function loadDashboard(){
           legend: { display: false },
           tooltip: {
             padding: 10,
-            callbacks: {
-              label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}`
-            }
+            callbacks: { label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}` }
           }
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: true, grid: { color: 'rgba(17,24,39,0.08)' } }
+          y: {
+            beginAtZero: true,
+            suggestedMax: yCfg.suggestedMax,
+            ticks: { stepSize: yCfg.stepSize },
+            grid: { color: 'rgba(17,24,39,0.08)' }
+          }
         }
       }
     });
@@ -532,6 +547,7 @@ async function loadClientDetail(){
     deliverablesBody.appendChild(tr);
   }
 
+  const yCfg = yScaleFor(values);
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
@@ -564,7 +580,12 @@ async function loadClientDetail(){
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: true, grid: { color: 'rgba(17,24,39,0.08)' } }
+          y: {
+            beginAtZero: true,
+            suggestedMax: yCfg.suggestedMax,
+            ticks: { stepSize: yCfg.stepSize },
+            grid: { color: 'rgba(17,24,39,0.08)' }
+          }
         }
       }
     });
@@ -591,4 +612,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
+  console.log('Deliverables script build: RYG-UI-v3');
 });
