@@ -22,11 +22,12 @@ function statusColors(s, a = 0.72){
   };
   const k = map[s] || map.green;
   return {
-    fill: `rgba(${k.r}, ${k.g}, ${k.b}, ${a})`,
-    stroke: k.stroke,
+    fill:  `rgba(${k.r}, ${k.g}, ${k.b}, ${a})`,
     hover: `rgba(${k.r}, ${k.g}, ${k.b}, ${Math.min(1, a + 0.15)})`,
+    stroke: k.stroke,
   };
 }
+/* Tight y-axis so bars look tall */
 function yScaleFor(values, headroom = 0.06){
   const nums = (values || []).map(v => Number(v) || 0);
   const rawMax = Math.max(0, ...nums);
@@ -47,7 +48,7 @@ function getThisFriday(){
 }
 function setCanvasHeight(id, px){
   const el = document.getElementById(id);
-  if (el) { el.height = px; el.style.maxHeight = px + 'px'; }
+  if (el){ el.height = px; el.style.maxHeight = px + 'px'; }
 }
 
 /* =========================
@@ -362,7 +363,7 @@ async function loadDashboard(){
     }
   }
 
-  // ===== Work by Client (Remaining) — object data only, no global labels =====
+  // ===== Work by Client (Remaining) — use labels[] + data[] from one sorted list =====
   const agg = {};
   for (const p of progressFiltered) {
     agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
@@ -371,29 +372,31 @@ async function loadDashboard(){
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
     const cur = worstByClient[p.client_fk] || 'green';
-    worstByClient[p.client_fk] = (cur === 'red' || s === 'red') ? 'red'
+    worstByClient[p.client_fk] =
+      (cur === 'red' || s === 'red') ? 'red'
       : (cur === 'yellow' || s === 'yellow') ? 'yellow' : 'green';
   }
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
-  const points = ranked.map(([id, v]) => ({ x: idTo[id]?.name || '—', y: v, status: worstByClient[id] || 'green' }));
-  const yCfg = yScaleFor(points.map(p => p.y), 0.05);
-  setCanvasHeight('byClientChart', 280);
+  const labels = ranked.map(([id]) => idTo[id]?.name || '—');
+  const values = ranked.map(([,v]) => v);
+  const statuses = ranked.map(([id]) => worstByClient[id] || 'green');
 
+  const fills   = statuses.map(s => statusColors(s).fill);
+  const hovers  = statuses.map(s => statusColors(s).hover);
+  const borders = statuses.map(s => statusColors(s).stroke);
+  const yCfg = yScaleFor(values, 0.05);
+
+  setCanvasHeight('byClientChart', 280);
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (byClientChart) byClientChart.destroy();
-    const fills   = points.map(p => statusColors(p.status).fill);
-    const hovers  = points.map(p => statusColors(p.status, 0.88).hover);
-    const borders = points.map(p => statusColors(p.status).stroke);
-
     byClientChart = new Chart(ctx, {
       type: 'bar',
       data: {
-        // no 'labels' here—dataset is the single source of truth
+        labels,                                        // <— names here
         datasets: [{
           label: 'Remaining',
-          data: points,                         // objects: {x, y, status}
-          parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+          data: values,                                // <— numbers here (same order)
           backgroundColor: fills,
           hoverBackgroundColor: hovers,
           borderColor: borders,
@@ -401,8 +404,6 @@ async function loadDashboard(){
           borderRadius: 10,
           borderSkipped: false,
           maxBarThickness: 44,
-          categoryPercentage: 0.8,
-          barPercentage: 0.9,
         }]
       },
       options: {
@@ -411,45 +412,29 @@ async function loadDashboard(){
         animation: { duration: 450, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            padding: 10,
-            callbacks: {
-              title: (items) => items[0]?.raw?.x ?? '',
-              label: (c) => `Remaining: ${fmt(c.parsed.y)}`
-            }
-          }
+          tooltip: { padding: 10, callbacks: { label: (c)=> `Remaining: ${fmt(c.parsed.y)}` } }
         },
-scales: {
-  x: {
-    type: 'category',
-    offset: false,
-    grid: { display: false },
-    ticks: {
-      autoSkip: false,      // show every client name
-      maxRotation: 0,
-      minRotation: 0,
-      font: { size: 11 },
-      // IMPORTANT: use a regular function so `this` is the scale
-      callback: function (value /* index */) {
-        const label = this.getLabelForValue(value);
-        return label && label.length > 18 ? label.slice(0, 16) + '…' : label;
-      },
-    },
-  },
-  y: {
-    min: yCfg.min,
-    max: yCfg.max,
-    ticks: { stepSize: yCfg.stepSize },
-    grid: { color: 'rgba(17,24,39,0.08)' },
-  },
-}
-  y: {
-    min: yCfg.min,
-    max: yCfg.max,
-    ticks: { stepSize: yCfg.stepSize },
-    grid: { color: 'rgba(17,24,39,0.08)' },
-  },
-}
+        scales: {
+          x: {
+            type: 'category',
+            offset: true,                      // center bars over ticks
+            grid: { display: false },
+            ticks: {
+              autoSkip: false,                 // show every label
+              maxRotation: 0, minRotation: 0,
+              font: { size: 11 },
+              callback: (val, idx) => {
+                const label = labels[idx] ?? '';
+                return label.length > 18 ? label.slice(0, 16) + '…' : label;
+              }
+            }
+          },
+          y: {
+            min: yCfg.min, max: yCfg.max,
+            ticks: { stepSize: yCfg.stepSize },
+            grid: { color: 'rgba(17,24,39,0.08)' }
+          }
+        }
       }
     });
   }
@@ -545,7 +530,9 @@ async function loadClientDetail(){
     .eq('client_fk', id).order('due_date', {ascending: true});
 
   deliverablesBody.innerHTML = '';
-  const points = []; // {x: due_date, y: remaining, status}
+  const labels = [];      // due dates
+  const values = [];      // remaining
+  const statuses = [];    // r/y/g for colors
 
   for (const d of (delivs || [])){
     const { data: prog } = await supabase.from('deliverable_progress')
@@ -553,7 +540,9 @@ async function loadClientDetail(){
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
 
-    points.push({ x: d.due_date, y: remaining, status });
+    labels.push(d.due_date);
+    values.push(remaining);
+    statuses.push(status);
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -566,24 +555,22 @@ async function loadClientDetail(){
     deliverablesBody.appendChild(tr);
   }
 
+  const fills   = statuses.map(s => statusColors(s).fill);
+  const hovers  = statuses.map(s => statusColors(s).hover);
+  const borders = statuses.map(s => statusColors(s).stroke);
+  const yCfg = yScaleFor(values, 0.08);
+
   setCanvasHeight('clientDueChart', 220);
-  const yCfg = yScaleFor(points.map(p => p.y), 0.08);
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
-
-    const fills   = points.map(p => statusColors(p.status).fill);
-    const hovers  = points.map(p => statusColors(p.status, 0.88).hover);
-    const borders = points.map(p => statusColors(p.status).stroke);
-
     clientDueChart = new Chart(ctx, {
       type: 'bar',
       data: {
-        // dataset holds labels & values—no separate labels array
+        labels,                         // <— dates here
         datasets: [{
           label: 'Remaining',
-          data: points,
-          parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+          data: values,                 // <— numbers here (same order)
           backgroundColor: fills,
           hoverBackgroundColor: hovers,
           borderColor: borders,
@@ -591,48 +578,27 @@ async function loadClientDetail(){
           borderRadius: 10,
           borderSkipped: false,
           maxBarThickness: 40,
-          categoryPercentage: 0.8,
-          barPercentage: 0.9,
         }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 450, easing: 'easeOutCubic' },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            padding: 10,
-            callbacks: {
-              title: (items) => items[0]?.raw?.x ?? '',
-              label: (c) => `Remaining: ${fmt(c.parsed.y)}`
-            }
+        plugins: { legend: { display: false },
+          tooltip: { padding: 10, callbacks: { label: (c)=> `Remaining: ${fmt(c.parsed.y)}` } } },
+        scales: {
+          x: {
+            type: 'category',
+            offset: true,
+            grid: { display: false },
+            ticks: { autoSkip: false, maxRotation: 0, minRotation: 0, font: { size: 11 } }
+          },
+          y: {
+            min: yCfg.min, max: yCfg.max,
+            ticks: { stepSize: yCfg.stepSize },
+            grid: { color: 'rgba(17,24,39,0.08)' }
           }
-        },
-scales: {
-  x: {
-    type: 'category',
-    offset: false,
-    grid: { display: false },
-    ticks: {
-      autoSkip: false,      // show every client name
-      maxRotation: 0,
-      minRotation: 0,
-      font: { size: 11 },
-      // IMPORTANT: use a regular function so `this` is the scale
-      callback: function (value /* index */) {
-        const label = this.getLabelForValue(value);
-        return label && label.length > 18 ? label.slice(0, 16) + '…' : label;
-      },
-    },
-  },
-  y: {
-    min: yCfg.min,
-    max: yCfg.max,
-    ticks: { stepSize: yCfg.stepSize },
-    grid: { color: 'rgba(17,24,39,0.08)' },
-  },
-}
+        }
       }
     });
   }
@@ -658,5 +624,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: labelsLock3');
+  console.log('Deliverables script build: labelsFinal');
 });
