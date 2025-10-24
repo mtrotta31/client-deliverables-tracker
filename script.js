@@ -1,14 +1,24 @@
+// script.js
 import { getSupabase } from './supabaseClient.js';
 
+/* =========================
+   Utilities & status logic
+   ========================= */
 function fmt(n){ return Number(n||0).toLocaleString(); }
 function daysUntil(due){ const ms = new Date(due) - new Date(); return Math.ceil(ms/86400000); }
 function simpleStatus(remaining, dueDate){
   if (remaining <= 0) return 'green';
   const days = Math.max(1, daysUntil(dueDate));
-  const need = remaining / days;
+  const need = remaining / days; // simple proxy for pace
   if (days <= 3 && remaining > 0) return 'red';
   if (need > 100) return 'yellow';
   return 'green';
+}
+function statusToColor(s) {
+  // Tailwind-ish palette
+  if (s === 'red') return '#ef4444';     // red-500
+  if (s === 'yellow') return '#eab308';  // amber-500
+  return '#22c55e';                      // green-500
 }
 function getThisFriday(){
   const d = new Date();
@@ -17,6 +27,10 @@ function getThisFriday(){
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0,10);
 }
+
+/* =========================
+   Global filters & bindings
+   ========================= */
 const filters = {
   contractedOnly: JSON.parse(localStorage.getItem('contractedOnly') ?? 'true'),
 };
@@ -24,21 +38,27 @@ function bindContractedCheckbox(){
   const cb = document.querySelector('#filterContracted');
   if (!cb) return;
   cb.checked = filters.contractedOnly;
-  cb.addEventListener('change', ()=>{
+  cb.onchange = ()=>{
     filters.contractedOnly = cb.checked;
     localStorage.setItem('contractedOnly', JSON.stringify(filters.contractedOnly));
-    loadDashboard(); loadClientsList();
-  });
+    loadDashboard(); 
+    loadClientsList();
+  };
 }
 
-// Refs
+/* =========================
+   DOM refs
+   ========================= */
+// Dashboard
 const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const kpiFriday = document.querySelector('#kpi-friday');
 const dueSoonTbody = document.querySelector('#due-soon-body');
 const fridayBody = document.querySelector('#friday-body');
+let byClientChart;
 
+// CSV importer
 const fileInput = document.querySelector('#csvFile');
 const previewBtn = document.querySelector('#previewBtn');
 const importBtn = document.querySelector('#importBtn');
@@ -46,16 +66,20 @@ const previewTable = document.querySelector('#previewTable');
 const previewTbody = document.querySelector('#previewTbody');
 const importSummary = document.querySelector('#importSummary');
 
+// Clients list
 const clientsTableBody = document.querySelector('#clientsBody');
 
+// Client detail
 const clientNameEl = document.querySelector('#clientName');
 const clientMetaEl = document.querySelector('#clientMeta');
 const deliverablesBody = document.querySelector('#deliverablesBody');
-let byClientChart, clientDueChart;
+let clientDueChart;
 
-/* ---------- CSV Preview ---------- */
+/* =========================
+   CSV preview & import
+   ========================= */
 if (previewBtn) {
-  previewBtn.addEventListener('click', () => {
+  previewBtn.onclick = () => {
     const f = fileInput?.files?.[0];
     if (!f) { alert('Choose a CSV file first.'); return; }
     if (!window.Papa) { alert('CSV parser not loaded.'); return; }
@@ -79,16 +103,16 @@ if (previewBtn) {
         importSummary.textContent = `${data.length} rows parsed. Ready to import.`;
       }
     });
-  });
+  };
 }
 
-/* ---------- CSV Import (includes new client fields) ---------- */
 if (importBtn) {
-  importBtn.addEventListener('click', async () => {
+  importBtn.onclick = async () => {
     const supabase = await getSupabase();
     if (!supabase) { alert('Supabase not configured (edit env.js and Supabase CORS).'); return; }
     const f = fileInput?.files?.[0];
     if (!f) { alert('Choose a CSV file first.'); return; }
+
     importBtn.disabled = true; importBtn.textContent = 'Importing…';
     window.Papa.parse(f, {
       header: true, skipEmptyLines: true,
@@ -97,6 +121,7 @@ if (importBtn) {
           const result = await importRows(data, supabase);
           importSummary.textContent = `Imported ${result.clients} clients and ${result.deliverables} deliverables.`;
           await loadDashboard();
+          await loadClientsList();
         } catch (e) {
           console.error(e); alert('Import failed. See console.');
         } finally {
@@ -104,10 +129,11 @@ if (importBtn) {
         }
       }
     });
-  });
+  };
 }
 
 async function importRows(rows, supabase){
+  // Build unique set of clients keyed by client_id OR normalized name
   const byKey = new Map();
   for (const r of rows) {
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -122,6 +148,7 @@ async function importRows(rows, supabase){
         products: (r.products||'').trim(),
         instructions: (r.instructions||'').trim(),
         start_date: r.start_date ? new Date(r.start_date).toISOString().slice(0,10) : null,
+        // New fields
         contract_executed: String(r.contract_executed||'').toLowerCase()==='true',
         contract_date: r.contract_date ? new Date(r.contract_date).toISOString().slice(0,10) : null,
         total_lives: r.total_lives ? Number(r.total_lives) : null,
@@ -129,6 +156,8 @@ async function importRows(rows, supabase){
       });
     }
   }
+
+  // Upsert clients; collect ids
   let insertedClients = 0;
   const keyToId = new Map();
   for (const [key, obj] of byKey.entries()){
@@ -145,6 +174,8 @@ async function importRows(rows, supabase){
       }
     }
   }
+
+  // Upsert deliverables (due-date only fallback)
   let insertedDeliverables = 0;
   for (const r of rows){
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -155,7 +186,7 @@ async function importRows(rows, supabase){
       client_fk,
       due_date: r.due_date ? new Date(r.due_date).toISOString().slice(0,10) : null,
       qty_due: Number(r.qty_due||0),
-      label: null
+      label: null  // ignored in MVP
     };
     if (deliverable.deliverable_id){
       const { error } = await supabase.from('deliverables').upsert(deliverable, { onConflict: 'deliverable_id' });
@@ -177,29 +208,37 @@ async function importRows(rows, supabase){
   return { clients: insertedClients, deliverables: insertedDeliverables };
 }
 
-/* ---------- Dashboard (filters, Friday KPI, Friday table, chart, logging) ---------- */
+/* =========================
+   Dashboard
+   ========================= */
 async function loadDashboard(){
   bindContractedCheckbox();
-  if (!kpiTotal) return;
+  if (!kpiTotal) return; // not on dashboard
+
   const supabase = await getSupabase();
   if (!supabase){
-    kpiTotal.setAttribute('value', '—'); kpiCompleted.setAttribute('value', '—');
-    kpiRemaining.setAttribute('value', '—'); if (kpiFriday) kpiFriday.setAttribute('value','—');
+    kpiTotal.setAttribute('value', '—'); 
+    kpiCompleted.setAttribute('value', '—');
+    kpiRemaining.setAttribute('value', '—'); 
+    if (kpiFriday) kpiFriday.setAttribute('value','—');
     if (fridayBody) fridayBody.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
     if (dueSoonTbody) dueSoonTbody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase in env.js to load live data.</td></tr>`;
     return;
   }
+
   const { data: progress, error } = await supabase
     .from('deliverable_progress')
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
   if (error){ console.error(error); return; }
 
-  // Fetch clients for names + contracted flag
+  // Fetch client names + contracted flag
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
   const { data: clients, error: cErr } = await supabase.from('clients')
     .select('id,name,contract_executed').in('id', clientIds);
   if (cErr){ console.error(cErr); return; }
   const idTo = Object.fromEntries(clients.map(c => [c.id, c]));
+
+  // Apply "Contracted only" if set
   const progressFiltered = filters.contractedOnly
     ? progress.filter(p => idTo[p.client_fk]?.contract_executed)
     : progress.slice();
@@ -212,14 +251,15 @@ async function loadDashboard(){
   kpiCompleted.setAttribute('value', fmt(completed));
   kpiRemaining.setAttribute('value', fmt(remaining));
 
-  // Friday KPI + by-client table
+  // "Due This Friday" KPI + table
   const friday = getThisFriday();
   const dueFri = progressFiltered.filter(p => p.due_date === friday);
   const friTotal = dueFri.reduce((a,b)=>a+(b.qty_due||0),0);
   if (kpiFriday) kpiFriday.setAttribute('value', fmt(friTotal));
+
   if (fridayBody){
     fridayBody.innerHTML = '';
-    if (dueFri.length === 0){
+    if (!dueFri.length){
       fridayBody.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-500 py-4">Nothing due this Friday.</td></tr>`;
     } else {
       const byClient = new Map();
@@ -240,29 +280,31 @@ async function loadDashboard(){
           <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log-friday="${cid}">Log</button></td>`;
         fridayBody.appendChild(tr);
       });
-      fridayBody.addEventListener('click', async (e)=>{
-        const btn = e.target.closest('button[data-log-friday]');
-        if (!btn) return;
-        const cid = btn.getAttribute('data-log-friday');
-        const qty = Number(prompt('Qty completed (will be posted to each Friday deliverable for this client)?'));
-        if (!qty || qty<=0) return;
-        const { data: friDeliverables } = await supabase
-          .from('deliverables').select('id').eq('client_fk', cid).eq('due_date', friday);
-        const chunk = Math.ceil(qty / Math.max(1, friDeliverables?.length||1));
-        for (const d of friDeliverables||[]){
-          await supabase.from('completions').insert({
-            deliverable_fk: d.id,
-            occurred_on: friday,
-            qty_completed: chunk,
-            note: 'Dashboard Friday quick-log'
-          });
-        }
-        await loadDashboard();
-      });
     }
+    // Prevent duplicate listeners on reloads
+    fridayBody.onclick = async (e)=>{
+      const btn = e.target.closest('button[data-log-friday]');
+      if (!btn) return;
+      const cid = btn.getAttribute('data-log-friday');
+      const qty = Number(prompt('Qty completed (distributed across this client’s Friday deliverables)?'));
+      if (!qty || qty<=0) return;
+      const { data: friDeliverables } = await supabase
+        .from('deliverables').select('id').eq('client_fk', cid).eq('due_date', friday);
+      const count = Math.max(1, friDeliverables?.length || 1);
+      const chunk = Math.ceil(qty / count);
+      for (const d of (friDeliverables||[])){
+        await supabase.from('completions').insert({
+          deliverable_fk: d.id,
+          occurred_on: friday,
+          qty_completed: chunk,
+          note: 'Dashboard Friday quick-log'
+        });
+      }
+      await loadDashboard();
+    };
   }
 
-  // Upcoming (first 10 by due date)
+  // Upcoming Due Dates (first 10)
   if (dueSoonTbody){
     const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
     const sorted = progressFiltered.slice().sort((a,b)=> new Date(a.due_date)-new Date(b.due_date));
@@ -279,41 +321,81 @@ async function loadDashboard(){
         <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button></td>`;
       dueSoonTbody.appendChild(tr);
     });
-    dueSoonTbody.addEventListener('click', async (e)=>{
+
+    // One-click logger (no duplicate listeners)
+    dueSoonTbody.onclick = async (e)=>{
       const btn = e.target.closest('button[data-log]');
       if (!btn) return;
       const deliverableId = btn.getAttribute('data-log');
       const qty = Number(prompt('Qty completed?')); if (!qty || qty<=0) return;
       const occurred = new Date().toISOString().slice(0,10);
-      await supabase.from('completions').insert({ deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty });
+      const { error: insErr } = await supabase.from('completions').insert({
+        deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty
+      });
+      if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
       await loadDashboard();
-    });
+    };
   }
 
-  // Chart: remaining by client (top 10)
+  // ===== Bar Chart: Remaining by Client (Top 10) with R/Y/G colors =====
+  // Aggregate remaining by client
   const agg = {};
-  for (const p of progressFiltered) agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
-  const labels = Object.entries(agg).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([id])=> (idTo[id]?.name)||'—');
-  const values = Object.entries(agg).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([,v])=> v);
+  for (const p of progressFiltered) {
+    agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
+  }
+  // Determine worst status per client
+  const worstByClient = {};
+  for (const p of progressFiltered) {
+    const s = simpleStatus(p.remaining_to_due, p.due_date);
+    const current = worstByClient[p.client_fk] || 'green';
+    worstByClient[p.client_fk] =
+      (current === 'red' || s === 'red') ? 'red'
+      : (current === 'yellow' || s === 'yellow') ? 'yellow'
+      : 'green';
+  }
+  // Sort and take top 10
+  const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
+  const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
+  const values = ranked.map(([,v]) => v);
+  const colors = ranked.map(([id]) => statusToColor(worstByClient[id] || 'green'));
+
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (byClientChart) byClientChart.destroy();
-    byClientChart = new Chart(ctx, { type: 'bar',
-      data: { labels, datasets: [{ label: 'Remaining', data: values }] },
-      options: { responsive: true, plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true } } }
+    byClientChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Remaining',
+          data: values,
+          backgroundColor: colors,
+          borderColor: '#111827',
+          borderWidth: 1,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
+      }
     });
   }
 }
 
-/* ---------- Clients list (adds client status + first-drop + lives/roster) ---------- */
+/* =========================
+   Clients list
+   ========================= */
 async function loadClientsList(){
   bindContractedCheckbox();
   if (!clientsTableBody) return;
+
   const supabase = await getSupabase();
   if (!supabase){
     clientsTableBody.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-4">Connect Supabase (env.js).</td></tr>`;
     return;
   }
+
   let { data: clients, error } = await supabase.from('clients')
     .select('id,name,total_lives,next_roster_pull,contract_executed')
     .order('name');
@@ -325,7 +407,6 @@ async function loadClientsList(){
     return;
   }
 
-  // For each client: first deliverable + client-level status (worst within next 14 days)
   clientsTableBody.innerHTML = '';
   const today = new Date();
   const in14 = new Date(); in14.setDate(today.getDate()+14);
@@ -367,7 +448,9 @@ async function loadClientsList(){
   }
 }
 
-/* ---------- Client detail (header fields + chart + logging) ---------- */
+/* =========================
+   Client detail
+   ========================= */
 async function loadClientDetail(){
   if (!clientNameEl) return;
   const id = new URL(window.location.href).searchParams.get('id');
@@ -377,6 +460,7 @@ async function loadClientDetail(){
     clientMetaEl.textContent = 'Connect Supabase to load details.';
     return;
   }
+
   const { data: client } = await supabase.from('clients')
     .select('*').eq('id', id).single();
   clientNameEl.textContent = client.name;
@@ -391,13 +475,18 @@ async function loadClientDetail(){
     .eq('client_fk', id).order('due_date', {ascending: true});
 
   deliverablesBody.innerHTML = '';
-  const labels = [], values = [];
-  for (const d of delivs||[]){
+  const labels = [], values = [], colors = [];
+
+  for (const d of (delivs || [])){
     const { data: prog } = await supabase.from('deliverable_progress')
       .select('remaining_to_due').eq('deliverable_id', d.id).single();
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
-    labels.push(d.due_date); values.push(remaining);
+
+    labels.push(d.due_date);
+    values.push(remaining);
+    colors.push(statusToColor(status));
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="text-sm">${d.due_date}</td>
@@ -412,13 +501,28 @@ async function loadClientDetail(){
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
-    clientDueChart = new Chart(ctx, { type:'bar',
-      data:{ labels, datasets:[{ label:'Remaining', data: values }] },
-      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    clientDueChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Remaining',
+          data: values,
+          backgroundColor: colors,
+          borderColor: '#111827',
+          borderWidth: 1,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
+      }
     });
   }
 
-  deliverablesBody.addEventListener('click', async (e)=>{
+  // One-click logger (no duplicate listeners)
+  deliverablesBody.onclick = async (e)=>{
     const btn = e.target.closest('button[data-log]'); if (!btn) return;
     const deliverableId = btn.getAttribute('data-log');
     const qty = Number(prompt('Qty completed?')); if (!qty || qty<=0) return;
@@ -428,10 +532,12 @@ async function loadClientDetail(){
     });
     if (error){ alert('Failed to log completion.'); console.error(error); return; }
     alert('Logged! Refreshing…'); location.reload();
-  });
+  };
 }
 
-/* ---------- Boot ---------- */
+/* =========================
+   Boot
+   ========================= */
 window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
