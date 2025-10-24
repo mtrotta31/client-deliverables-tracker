@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Deliverables Tracker — Clients</title>
+  <title>Deliverables Tracker — Dashboard</title>
 
   <!-- Styles -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -11,8 +11,12 @@
 
   <!-- Web Components -->
   <script defer src="./navbar.js"></script>
+  <script defer src="./kpi-card.js"></script>
   <script defer src="./status-badge.js"></script>
   <script defer src="./footer.js"></script>
+
+  <!-- Charts -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
@@ -20,120 +24,38 @@
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
 
-      <!-- Header actions -->
-      <div class="flex items-center justify-between mb-4">
-        <h1 class="text-2xl font-semibold">Clients</h1>
-        <div class="flex items-center gap-6">
-          <label class="text-sm inline-flex items-center gap-2">
-            <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
-            <span>Contracted only</span>
-          </label>
-          <button id="btnAddClient" class="px-3 py-2 rounded bg-indigo-600 text-white text-sm">Add Client</button>
+      <!-- Header & filter -->
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-semibold">Dashboard</h1>
+        <label class="text-sm inline-flex items-center gap-2">
+          <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
+          <span>Contracted only</span>
+        </label>
+      </div>
+
+      <!-- KPIs (This Week) -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
+        <kpi-card id="kpi-total" label="Required This Week" value="—"></kpi-card>
+        <kpi-card id="kpi-completed" label="Completed" value="—"></kpi-card>
+        <kpi-card id="kpi-remaining" label="Remaining" value="—"></kpi-card>
+      </div>
+
+      <!-- This Week by Client (Completed vs Remaining) -->
+      <section class="mt-8 rounded-2xl border bg-white p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">This Week by Client (Completed vs Remaining)</h2>
+          <span class="text-sm text-gray-500">Mon–Fri (EST)</span>
         </div>
-      </div>
 
-      <!-- Clients table -->
-      <div class="card overflow-auto">
-        <table>
-          <thead>
-            <tr class="text-xs text-gray-500">
-              <th>Name</th>
-              <th>Total Lives</th>
-              <th>Weekly Commitment</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="clientsBody">
-            <tr><td colspan="4" class="text-sm text-gray-500 py-4">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Add/Edit Client Modal -->
-      <div id="clientModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm hidden z-50">
-        <div class="bg-white rounded-2xl shadow-xl w-full max-w-3xl mx-auto mt-16 p-6 overflow-y-auto max-h-[80vh]">
-          <div class="flex items-center justify-between mb-4">
-            <h2 id="clientModalTitle" class="text-xl font-semibold">Add Client</h2>
-            <button id="clientModalClose" class="text-gray-500 hover:text-gray-700">✕</button>
+        <!-- Horizontal scroll to show ALL clients -->
+        <div id="allClientsScroller" class="overflow-x-auto">
+          <div style="min-width: 1100px;">
+            <canvas id="byClientChart"></canvas>
           </div>
-
-          <form id="clientForm" class="space-y-6">
-            <input type="hidden" name="client_id" />
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label class="text-sm">Client Name
-                <input name="name" class="w-full border rounded px-3 py-2" required />
-              </label>
-              <label class="text-sm">Total Lives
-                <input name="total_lives" type="number" class="w-full border rounded px-3 py-2" />
-              </label>
-              <label class="text-sm">Contact Name
-                <input name="contact_name" class="w-full border rounded px-3 py-2" />
-              </label>
-              <label class="text-sm">Contact Email
-                <input name="contact_email" type="email" class="w-full border rounded px-3 py-2" />
-              </label>
-            </div>
-
-            <label class="text-sm block">Instructions / Notes
-              <textarea name="instructions" rows="3" class="w-full border rounded px-3 py-2"></textarea>
-            </label>
-
-            <!-- Addresses repeater -->
-            <div>
-              <div class="flex items-center justify-between">
-                <h3 class="font-medium">Addresses</h3>
-                <button type="button" id="btnAddAddr" class="text-indigo-600 text-sm">+ Add address</button>
-              </div>
-              <div id="addressesList" class="space-y-2 mt-2"></div>
-            </div>
-
-            <!-- EMRs repeater -->
-            <div>
-              <div class="flex items-center justify-between">
-                <h3 class="font-medium">EMR Systems</h3>
-                <button type="button" id="btnAddEmr" class="text-indigo-600 text-sm">+ Add EMR</button>
-              </div>
-              <div id="emrsList" class="space-y-2 mt-2"></div>
-            </div>
-
-            <!-- Weekly commitment -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label class="text-sm">Weekly Commitment (qty/week)
-                <input name="weekly_qty" type="number" min="0" class="w-full border rounded px-3 py-2" />
-              </label>
-              <label class="text-sm">Start Monday
-                <input name="start_week" type="date" class="w-full border rounded px-3 py-2" />
-              </label>
-            </div>
-
-            <div class="flex justify-end gap-3">
-              <button type="button" id="clientCancel" class="px-4 py-2 rounded border">Cancel</button>
-              <button type="submit" class="px-4 py-2 rounded bg-gray-900 text-white">Save</button>
-            </div>
-          </form>
         </div>
-      </div>
+      </section>
 
-      <!-- Row templates -->
-      <template id="addrRowTpl">
-        <div class="grid grid-cols-12 gap-2 items-center">
-          <input name="line1" placeholder="Line 1" class="col-span-4 border rounded px-2 py-1">
-          <input name="line2" placeholder="Line 2" class="col-span-3 border rounded px-2 py-1">
-          <input name="city" placeholder="City" class="col-span-2 border rounded px-2 py-1">
-          <input name="state" placeholder="ST" class="col-span-1 border rounded px-2 py-1">
-          <input name="zip" placeholder="ZIP" class="col-span-1 border rounded px-2 py-1">
-          <button type="button" class="col-span-1 text-sm text-red-600 remove">Remove</button>
-        </div>
-      </template>
-
-      <template id="emrRowTpl">
-        <div class="grid grid-cols-12 gap-2 items-center">
-          <input name="vendor" placeholder="Vendor" class="col-span-5 border rounded px-2 py-1">
-          <input name="details" placeholder="Notes" class="col-span-6 border rounded px-2 py-1">
-          <button type="button" class="col-span-1 text-sm text-red-600 remove">Remove</button>
-        </div>
-      </template>
+      <!-- (Optional future: timeline table/cards can go here) -->
 
     </div>
   </main>
