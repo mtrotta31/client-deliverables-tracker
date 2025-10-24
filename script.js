@@ -14,12 +14,23 @@ function simpleStatus(remaining, dueDate){
   if (need > 100) return 'yellow';
   return 'green';
 }
-function statusToColor(s) {
-  // Tailwind-ish palette
-  if (s === 'red') return '#ef4444';     // red-500
-  if (s === 'yellow') return '#eab308';  // amber-500
-  return '#22c55e';                      // green-500
+
+// Nicer color system (Tailwind-inspired), with alpha support for silky fills
+function statusColors(s, a = 0.75){
+  // base colors chosen for good contrast on white backgrounds
+  const map = {
+    green:  { r: 34,  g:197, b: 94,  stroke: '#16a34a' }, // green-500/600
+    yellow: { r:234,  g:179, b:  8,  stroke: '#d97706' }, // amber-500/600
+    red:    { r:239,  g: 68, b: 68,  stroke: '#b91c1c' }, // red-500/700
+  };
+  const k = map[s] || map.green;
+  return {
+    fill: `rgba(${k.r}, ${k.g}, ${k.b}, ${a})`,
+    stroke: k.stroke,
+    hover: `rgba(${k.r}, ${k.g}, ${k.b}, ${Math.min(1, a + 0.15)})`,
+  };
 }
+
 function getThisFriday(){
   const d = new Date();
   const day = d.getDay(); // 0 Sun ... 5 Fri
@@ -337,7 +348,7 @@ async function loadDashboard(){
     };
   }
 
-  // ===== Bar Chart: Remaining by Client (Top 10) with R/Y/G colors =====
+  // ===== Bar Chart: Remaining by Client (Top 10) with silky colors & rounded bars =====
   // Aggregate remaining by client
   const agg = {};
   for (const p of progressFiltered) {
@@ -357,7 +368,9 @@ async function loadDashboard(){
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
   const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
   const values = ranked.map(([,v]) => v);
-  const colors = ranked.map(([id]) => statusToColor(worstByClient[id] || 'green'));
+  const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.72).fill);
+  const borders= ranked.map(([id]) => statusColors(worstByClient[id] || 'green').stroke);
+  const hovers = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.88).hover);
 
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
@@ -369,15 +382,32 @@ async function loadDashboard(){
         datasets: [{
           label: 'Remaining',
           data: values,
-          backgroundColor: colors,
-          borderColor: '#111827',
-          borderWidth: 1,
+          backgroundColor: fills,
+          hoverBackgroundColor: hovers,
+          borderColor: borders,
+          borderWidth: 1.5,
+          borderRadius: 10,
+          borderSkipped: false,
+          maxBarThickness: 36,
         }]
       },
       options: {
         responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
+        maintainAspectRatio: false,
+        animation: { duration: 600, easing: 'easeOutCubic' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            padding: 10,
+            callbacks: {
+              label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}`
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+          y: { beginAtZero: true, grid: { color: 'rgba(17,24,39,0.08)' } }
+        }
       }
     });
   }
@@ -475,7 +505,7 @@ async function loadClientDetail(){
     .eq('client_fk', id).order('due_date', {ascending: true});
 
   deliverablesBody.innerHTML = '';
-  const labels = [], values = [], colors = [];
+  const labels = [], values = [], fills = [], borders = [], hovers = [];
 
   for (const d of (delivs || [])){
     const { data: prog } = await supabase.from('deliverable_progress')
@@ -483,9 +513,13 @@ async function loadClientDetail(){
     const remaining = prog?.remaining_to_due ?? d.qty_due;
     const status = simpleStatus(remaining, d.due_date);
 
+    const color = statusColors(status, 0.72);
+
     labels.push(d.due_date);
     values.push(remaining);
-    colors.push(statusToColor(status));
+    fills.push(color.fill);
+    hovers.push(color.hover);
+    borders.push(color.stroke);
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -508,15 +542,30 @@ async function loadClientDetail(){
         datasets: [{
           label: 'Remaining',
           data: values,
-          backgroundColor: colors,
-          borderColor: '#111827',
-          borderWidth: 1,
+          backgroundColor: fills,
+          hoverBackgroundColor: hovers,
+          borderColor: borders,
+          borderWidth: 1.5,
+          borderRadius: 10,
+          borderSkipped: false,
+          maxBarThickness: 36,
         }]
       },
       options: {
         responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
+        maintainAspectRatio: false,
+        animation: { duration: 600, easing: 'easeOutCubic' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            padding: 10,
+            callbacks: { label: (ctx) => `Remaining: ${fmt(ctx.parsed.y)}` }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+          y: { beginAtZero: true, grid: { color: 'rgba(17,24,39,0.08)' } }
+        }
       }
     });
   }
