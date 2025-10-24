@@ -31,16 +31,16 @@ function statusColors(s, a = 0.72){
 }
 
 /* === Tight y-axis autoscale (bars look long) ===
-   Hard max ~8% above tallest bar, nice step size.
+   Hard max slightly above tallest bar, nice step size.
    If all values are 0 (or empty), use a tiny axis so the chart isn’t huge.
 */
-function yScaleFor(values){
+function yScaleFor(values, headroom = 0.06){  // default ~6% headroom
   const nums = (values || []).map(v => Number(v) || 0);
   const rawMax = Math.max(0, ...nums);
   if (!isFinite(rawMax) || rawMax <= 0) {
-    return { min: 0, max: 1, stepSize: 1 }; // compact axis for empty/zero data
+    return { min: 0, max: 1, stepSize: 1 };
   }
-  const top = Math.ceil(rawMax * 1.08); // ~8% headroom
+  const top = Math.ceil(rawMax * (1 + headroom));
   const rough = top / 5; // aim ~5 ticks
   const pow = Math.pow(10, Math.floor(Math.log10(rough)));
   const nice = Math.ceil(rough / pow) * pow;
@@ -52,9 +52,18 @@ function yScaleFor(values){
 function getThisFriday(){
   const d = new Date();
   const day = d.getDay(); // 0 Sun ... 5 Fri
-  const diff = (5 - day + 7) % 7; // days until Friday
+  const diff = (5 - day + 7) % 7;
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0,10);
+}
+
+/* Small helper to lock canvas pixel height (prevents runaway tall charts) */
+function setCanvasHeight(id, px){
+  const el = document.getElementById(id);
+  if (el) {
+    el.height = px;                 // Chart.js respects element height when maintainAspectRatio=false
+    el.style.maxHeight = px + 'px'; // belt & suspenders
+  }
 }
 
 /* =========================
@@ -162,7 +171,6 @@ if (importBtn) {
 }
 
 async function importRows(rows, supabase){
-  // Build unique set of clients keyed by client_id OR normalized name
   const byKey = new Map();
   for (const r of rows) {
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -177,7 +185,6 @@ async function importRows(rows, supabase){
         products: (r.products||'').trim(),
         instructions: (r.instructions||'').trim(),
         start_date: r.start_date ? new Date(r.start_date).toISOString().slice(0,10) : null,
-        // New fields for Rhonda
         contract_executed: String(r.contract_executed||'').toLowerCase()==='true',
         contract_date: r.contract_date ? new Date(r.contract_date).toISOString().slice(0,10) : null,
         total_lives: r.total_lives ? Number(r.total_lives) : null,
@@ -186,7 +193,6 @@ async function importRows(rows, supabase){
     }
   }
 
-  // Upsert clients; collect ids
   let insertedClients = 0;
   const keyToId = new Map();
   for (const [key, obj] of byKey.entries()){
@@ -204,7 +210,6 @@ async function importRows(rows, supabase){
     }
   }
 
-  // Upsert deliverables (due-date only fallback)
   let insertedDeliverables = 0;
   for (const r of rows){
     const key = (r.client_id && r.client_id.trim()) ? r.client_id.trim() : (r.client_name||'').toLowerCase().trim();
@@ -215,7 +220,7 @@ async function importRows(rows, supabase){
       client_fk,
       due_date: r.due_date ? new Date(r.due_date).toISOString().slice(0,10) : null,
       qty_due: Number(r.qty_due||0),
-      label: null  // MVP ignores ongoing weekly label
+      label: null
     };
     if (deliverable.deliverable_id){
       const { error } = await supabase.from('deliverables').upsert(deliverable, { onConflict: 'deliverable_id' });
@@ -242,7 +247,7 @@ async function importRows(rows, supabase){
    ========================= */
 async function loadDashboard(){
   bindContractedCheckbox();
-  if (!kpiTotal) return; // not on dashboard
+  if (!kpiTotal) return;
 
   const supabase = await getSupabase();
   if (!supabase){
@@ -260,14 +265,12 @@ async function loadDashboard(){
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
   if (error){ console.error(error); return; }
 
-  // Clients
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
   const { data: clients, error: cErr } = await supabase.from('clients')
     .select('id,name,contract_executed').in('id', clientIds);
   if (cErr){ console.error(cErr); return; }
   const idTo = Object.fromEntries(clients.map(c => [c.id, c]));
 
-  // Filter: contracted only?
   const progressFiltered = filters.contractedOnly
     ? progress.filter(p => idTo[p.client_fk]?.contract_executed)
     : progress.slice();
@@ -280,7 +283,7 @@ async function loadDashboard(){
   kpiCompleted.setAttribute('value', fmt(completed));
   kpiRemaining.setAttribute('value', fmt(remaining));
 
-  // "Due This Friday"
+  // Due this Friday
   const friday = getThisFriday();
   const dueFri = progressFiltered.filter(p => p.due_date === friday);
   const friTotal = dueFri.reduce((a,b)=>a+(b.qty_due||0),0);
@@ -329,39 +332,7 @@ async function loadDashboard(){
     };
   }
 
-  // Upcoming (first 10)
-  if (dueSoonTbody){
-    const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
-    const sorted = progressFiltered.slice().sort((a,b)=> new Date(a.due_date)-new Date(b.due_date));
-    dueSoonTbody.innerHTML = '';
-    sorted.slice(0,10).forEach(p=>{
-      const status = simpleStatus(p.remaining_to_due, p.due_date);
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${p.client_fk}">${idToName[p.client_fk] || '—'}</a></td>
-        <td class="text-sm">${p.due_date}</td>
-        <td class="text-sm">${fmt(p.qty_due)}</td>
-        <td class="text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
-        <td class="text-sm"><status-badge status="${status}"></status-badge></td>
-        <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button></td>`;
-      dueSoonTbody.appendChild(tr);
-    });
-
-    dueSoonTbody.onclick = async (e)=>{
-      const btn = e.target.closest('button[data-log]');
-      if (!btn) return;
-      const deliverableId = btn.getAttribute('data-log');
-      const qty = Number(prompt('Qty completed?')); if (!qty || qty<=0) return;
-      const occurred = new Date().toISOString().slice(0,10);
-      const { error: insErr } = await supabase.from('completions').insert({
-        deliverable_fk: deliverableId, occurred_on: occurred, qty_completed: qty
-      });
-      if (insErr){ alert('Failed to log completion.'); console.error(insErr); return; }
-      await loadDashboard();
-    };
-  }
-
-  // ===== Bar: Remaining by Client (Top 10) =====
+  // ===== Dashboard bar: Remaining by Client (Top 10) =====
   const agg = {};
   for (const p of progressFiltered) {
     agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
@@ -378,10 +349,13 @@ async function loadDashboard(){
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
   const labels = ranked.map(([id]) => (idTo[id]?.name) || '—');
   const values = ranked.map(([,v]) => v);
-  const yCfg = yScaleFor(values);
+  const yCfg = yScaleFor(values, 0.05); // tighter headroom on dashboard
   const fills  = ranked.map(([id]) => statusColors(worstByClient[id] || 'green').fill);
   const borders= ranked.map(([id]) => statusColors(worstByClient[id] || 'green').stroke);
   const hovers = ranked.map(([id]) => statusColors(worstByClient[id] || 'green', 0.88).hover);
+
+  // Make dashboard bars nice and tall but controlled
+  setCanvasHeight('byClientChart', 280);
 
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
@@ -399,13 +373,13 @@ async function loadDashboard(){
           borderWidth: 1.5,
           borderRadius: 10,
           borderSkipped: false,
-          maxBarThickness: 36,
+          maxBarThickness: 44,
         }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: { duration: 500, easing: 'easeOutCubic' },
+        animation: { duration: 450, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
           tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
@@ -542,7 +516,9 @@ async function loadClientDetail(){
     deliverablesBody.appendChild(tr);
   }
 
-  const yCfg = yScaleFor(values);
+  // Lock a small height so the chart can't break the layout
+  setCanvasHeight('clientDueChart', 220);
+  const yCfg = yScaleFor(values, 0.08); // a touch more headroom on detail
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (clientDueChart) clientDueChart.destroy();
@@ -559,13 +535,13 @@ async function loadClientDetail(){
           borderWidth: 1.5,
           borderRadius: 10,
           borderSkipped: false,
-          maxBarThickness: 36,
+          maxBarThickness: 40,
         }]
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false,
-        animation: { duration: 500, easing: 'easeOutCubic' },
+        maintainAspectRatio: false, // use explicit pixel height above
+        animation: { duration: 450, easing: 'easeOutCubic' },
         plugins: {
           legend: { display: false },
           tooltip: { padding: 10, callbacks: { label: (c) => `Remaining: ${fmt(c.parsed.y)}` } }
@@ -574,7 +550,7 @@ async function loadClientDetail(){
           x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: {
             min: yCfg.min,
-            max: yCfg.max,                 // tight cap
+            max: yCfg.max,
             ticks: { stepSize: yCfg.stepSize },
             grid: { color: 'rgba(17,24,39,0.08)' }
           }
@@ -604,5 +580,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: scale-tight v2');
+  console.log('Deliverables script build: refresh3');
 });
