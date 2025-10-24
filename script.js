@@ -419,10 +419,27 @@ async function loadDashboard(){
             }
           }
         },
-        scales: {
-          x: { type: 'category', offset: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
-        }
+scales: {
+  x: {
+    type: 'category',
+    offset: false,                 // keep ticks centered on bars
+    grid: { display: false },
+    ticks: {
+      autoSkip: false,             // <— show ALL labels
+      maxRotation: 0,
+      minRotation: 0,
+      font: { size: 11 },
+      // shorten long names so they don’t collide
+      callback: (val) => (String(val).length > 18 ? String(val).slice(0, 16) + '…' : val),
+    },
+  },
+  y: {
+    min: yCfg.min,
+    max: yCfg.max,
+    ticks: { stepSize: yCfg.stepSize },
+    grid: { color: 'rgba(17,24,39,0.08)' },
+  },
+}
       }
     });
   }
@@ -582,10 +599,26 @@ async function loadClientDetail(){
             }
           }
         },
-        scales: {
-          x: { type: 'category', offset: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
-        }
+scales: {
+  x: {
+    type: 'category',
+    offset: false,
+    grid: { display: false },
+    ticks: {
+      autoSkip: false,
+      maxRotation: 0,
+      minRotation: 0,
+      font: { size: 11 },
+      callback: (val) => (String(val).length > 18 ? String(val).slice(0, 16) + '…' : val),
+    },
+  },
+  y: {
+    min: yCfg.min,
+    max: yCfg.max,
+    ticks: { stepSize: yCfg.stepSize },
+    grid: { color: 'rgba(17,24,39,0.08)' },
+  },
+}
       }
     });
   }
