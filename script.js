@@ -14,13 +14,11 @@ function simpleStatus(remaining, dueDate){
   if (need > 100) return 'yellow';
   return 'green';
 }
-
-// Tailwind-ish colors with soft alpha fills
 function statusColors(s, a = 0.72){
   const map = {
-    green:  { r: 34,  g:197, b: 94,  stroke: '#16a34a' }, // green-500/600
-    yellow: { r:234,  g:179, b:  8,  stroke: '#d97706' }, // amber-500/600
-    red:    { r:239,  g: 68, b: 68,  stroke: '#b91c1c' }, // red-500/700
+    green:  { r: 34,  g:197, b: 94,  stroke: '#16a34a' },
+    yellow: { r:234,  g:179, b:  8,  stroke: '#d97706' },
+    red:    { r:239,  g: 68, b: 68,  stroke: '#b91c1c' },
   };
   const k = map[s] || map.green;
   return {
@@ -29,8 +27,6 @@ function statusColors(s, a = 0.72){
     hover: `rgba(${k.r}, ${k.g}, ${k.b}, ${Math.min(1, a + 0.15)})`,
   };
 }
-
-/* Tight y-axis autoscale (bars look long) */
 function yScaleFor(values, headroom = 0.06){
   const nums = (values || []).map(v => Number(v) || 0);
   const rawMax = Math.max(0, ...nums);
@@ -43,22 +39,19 @@ function yScaleFor(values, headroom = 0.06){
   const max = Math.ceil(top / step) * step;
   return { min: 0, max, stepSize: step };
 }
-
 function getThisFriday(){
   const d = new Date();
   const diff = (5 - d.getDay() + 7) % 7;
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0,10);
 }
-
-// Lock canvas pixel height (prevents runaway tall charts)
 function setCanvasHeight(id, px){
   const el = document.getElementById(id);
   if (el) { el.height = px; el.style.maxHeight = px + 'px'; }
 }
 
 /* =========================
-   Global filters & bindings
+   Global filters
    ========================= */
 const filters = {
   contractedOnly: JSON.parse(localStorage.getItem('contractedOnly') ?? 'true'),
@@ -83,7 +76,6 @@ const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const kpiFriday = document.querySelector('#kpi-friday');
-// Robust selector for Upcoming table body (covers legacy IDs)
 const dueSoonTbody =
   document.querySelector('#due-soon-body') ||
   document.querySelector('#upcomingBody') ||
@@ -138,11 +130,10 @@ if (previewBtn) {
     });
   };
 }
-
 if (importBtn) {
   importBtn.onclick = async () => {
     const supabase = await getSupabase();
-    if (!supabase) { alert('Supabase not configured (edit env.js and Supabase CORS).'); return; }
+    if (!supabase) { alert('Supabase not configured (env.js + CORS).'); return; }
     const f = fileInput?.files?.[0];
     if (!f) { alert('Choose a CSV file first.'); return; }
 
@@ -164,7 +155,6 @@ if (importBtn) {
     });
   };
 }
-
 async function importRows(rows, supabase){
   const byKey = new Map();
   for (const r of rows) {
@@ -255,15 +245,13 @@ async function loadDashboard(){
     return;
   }
 
-  const { data: progress, error } = await supabase
+  const { data: progress } = await supabase
     .from('deliverable_progress')
     .select('deliverable_id, client_fk, due_date, qty_due, remaining_to_due');
-  if (error){ console.error(error); return; }
 
   const clientIds = [...new Set(progress.map(p => p.client_fk))];
-  const { data: clients, error: cErr } = await supabase.from('clients')
+  const { data: clients } = await supabase.from('clients')
     .select('id,name,contract_executed').in('id', clientIds);
-  if (cErr){ console.error(cErr); return; }
   const idTo = Object.fromEntries(clients.map(c => [c.id, c]));
 
   const progressFiltered = filters.contractedOnly
@@ -327,17 +315,15 @@ async function loadDashboard(){
     };
   }
 
-  /* ==== Upcoming Due Dates (future only) ==== */
+  // Upcoming Due Dates (future only)
   if (dueSoonTbody){
     const idToName = Object.fromEntries(clients.map(c => [c.id, c.name]));
     dueSoonTbody.innerHTML = '';
-
     const todayISO = new Date().toISOString().slice(0,10);
     const upcoming = progressFiltered
       .filter(p => p.due_date >= todayISO)
       .sort((a,b)=> new Date(a.due_date) - new Date(b.due_date))
       .slice(0,10);
-
     if (!upcoming.length){
       const tr = document.createElement('tr');
       tr.innerHTML = `<td colspan="6" class="py-4 text-sm text-gray-500">No upcoming due dates.</td>`;
@@ -356,13 +342,9 @@ async function loadDashboard(){
           <td class="py-2 pr-6 text-sm">${fmt(p.qty_due)}</td>
           <td class="py-2 pr-6 text-sm">${fmt(p.qty_due - p.remaining_to_due)}</td>
           <td class="py-2 pr-6 text-sm"><status-badge status="${status}"></status-badge></td>
-          <td class="py-2 pr-6 text-sm">
-            <button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button>
-          </td>`;
+          <td class="py-2 pr-6 text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" data-log="${p.deliverable_id}">Log</button></td>`;
         dueSoonTbody.appendChild(tr);
       });
-
-      // Quick log handler
       dueSoonTbody.onclick = async (e)=>{
         const supabase = await getSupabase();
         const btn = e.target.closest('button[data-log]');
@@ -380,7 +362,7 @@ async function loadDashboard(){
     }
   }
 
-  // ===== Dashboard bar: Remaining by Client (Top 10) — object-based data (prevents misalignment) =====
+  // ===== Work by Client (Remaining) — object data only, no global labels =====
   const agg = {};
   for (const p of progressFiltered) {
     agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
@@ -389,24 +371,17 @@ async function loadDashboard(){
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
     const cur = worstByClient[p.client_fk] || 'green';
-    worstByClient[p.client_fk] =
-      (cur === 'red' || s === 'red') ? 'red'
-      : (cur === 'yellow' || s === 'yellow') ? 'yellow'
-      : 'green';
+    worstByClient[p.client_fk] = (cur === 'red' || s === 'red') ? 'red'
+      : (cur === 'yellow' || s === 'yellow') ? 'yellow' : 'green';
   }
   const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
-  const points = ranked.map(([id, v]) => ({
-    x: idTo[id]?.name || '—',
-    y: v,
-    status: worstByClient[id] || 'green'
-  }));
+  const points = ranked.map(([id, v]) => ({ x: idTo[id]?.name || '—', y: v, status: worstByClient[id] || 'green' }));
   const yCfg = yScaleFor(points.map(p => p.y), 0.05);
   setCanvasHeight('byClientChart', 280);
 
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (byClientChart) byClientChart.destroy();
-
     const fills   = points.map(p => statusColors(p.status).fill);
     const hovers  = points.map(p => statusColors(p.status, 0.88).hover);
     const borders = points.map(p => statusColors(p.status).stroke);
@@ -414,7 +389,7 @@ async function loadDashboard(){
     byClientChart = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: points.map(p => p.x), // optional but keeps tick order clear
+        // no 'labels' here—dataset is the single source of truth
         datasets: [{
           label: 'Remaining',
           data: points,                         // objects: {x, y, status}
@@ -426,6 +401,8 @@ async function loadDashboard(){
           borderRadius: 10,
           borderSkipped: false,
           maxBarThickness: 44,
+          categoryPercentage: 0.8,
+          barPercentage: 0.9,
         }]
       },
       options: {
@@ -443,7 +420,7 @@ async function loadDashboard(){
           }
         },
         scales: {
-          x: { type: 'category', offset: false, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+          x: { type: 'category', offset: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
         }
       }
@@ -464,10 +441,9 @@ async function loadClientsList(){
     return;
   }
 
-  let { data: clients, error } = await supabase.from('clients')
+  let { data: clients } = await supabase.from('clients')
     .select('id,name,total_lives,next_roster_pull,contract_executed')
     .order('name');
-  if (error){ console.error(error); return; }
   if (filters.contractedOnly) clients = clients.filter(c=>c.contract_executed);
 
   if (!clients?.length){
@@ -563,7 +539,7 @@ async function loadClientDetail(){
     deliverablesBody.appendChild(tr);
   }
 
-  setCanvasHeight('clientDueChart', 220); // compact
+  setCanvasHeight('clientDueChart', 220);
   const yCfg = yScaleFor(points.map(p => p.y), 0.08);
   const ctx = document.getElementById('clientDueChart')?.getContext('2d');
   if (ctx && window.Chart){
@@ -576,10 +552,10 @@ async function loadClientDetail(){
     clientDueChart = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: points.map(p => p.x),
+        // dataset holds labels & values—no separate labels array
         datasets: [{
           label: 'Remaining',
-          data: points,                         // objects ensure alignment
+          data: points,
           parsing: { xAxisKey: 'x', yAxisKey: 'y' },
           backgroundColor: fills,
           hoverBackgroundColor: hovers,
@@ -588,6 +564,8 @@ async function loadClientDetail(){
           borderRadius: 10,
           borderSkipped: false,
           maxBarThickness: 40,
+          categoryPercentage: 0.8,
+          barPercentage: 0.9,
         }]
       },
       options: {
@@ -605,7 +583,7 @@ async function loadClientDetail(){
           }
         },
         scales: {
-          x: { type: 'category', offset: false, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+          x: { type: 'category', offset: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
           y: { min: yCfg.min, max: yCfg.max, ticks: { stepSize: yCfg.stepSize }, grid: { color: 'rgba(17,24,39,0.08)' } }
         }
       }
@@ -633,5 +611,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: labelsLock2');
+  console.log('Deliverables script build: labelsLock3');
 });
