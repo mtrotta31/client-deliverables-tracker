@@ -422,17 +422,27 @@ async function loadDashboard(){
 scales: {
   x: {
     type: 'category',
-    offset: false,                 // keep ticks centered on bars
+    offset: false,
     grid: { display: false },
     ticks: {
-      autoSkip: false,             // <— show ALL labels
+      autoSkip: false,      // show every client name
       maxRotation: 0,
       minRotation: 0,
       font: { size: 11 },
-      // shorten long names so they don’t collide
-      callback: (val) => (String(val).length > 18 ? String(val).slice(0, 16) + '…' : val),
+      // IMPORTANT: use a regular function so `this` is the scale
+      callback: function (value /* index */) {
+        const label = this.getLabelForValue(value);
+        return label && label.length > 18 ? label.slice(0, 16) + '…' : label;
+      },
     },
   },
+  y: {
+    min: yCfg.min,
+    max: yCfg.max,
+    ticks: { stepSize: yCfg.stepSize },
+    grid: { color: 'rgba(17,24,39,0.08)' },
+  },
+}
   y: {
     min: yCfg.min,
     max: yCfg.max,
@@ -605,11 +615,15 @@ scales: {
     offset: false,
     grid: { display: false },
     ticks: {
-      autoSkip: false,
+      autoSkip: false,      // show every client name
       maxRotation: 0,
       minRotation: 0,
       font: { size: 11 },
-      callback: (val) => (String(val).length > 18 ? String(val).slice(0, 16) + '…' : val),
+      // IMPORTANT: use a regular function so `this` is the scale
+      callback: function (value /* index */) {
+        const label = this.getLabelForValue(value);
+        return label && label.length > 18 ? label.slice(0, 16) + '…' : label;
+      },
     },
   },
   y: {
