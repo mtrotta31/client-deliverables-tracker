@@ -52,6 +52,59 @@ function setCanvasHeight(id, px){
 }
 
 /* =========================
+   Feature flag: Progress mode (stacked bars + % labels)
+   ========================= */
+function isProgressMode() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('progress') === '1') {
+    localStorage.setItem('progressBars', 'true');
+    return true;
+  }
+  if (q.get('progress') === '0') {
+    localStorage.setItem('progressBars', 'false');
+    return false;
+  }
+  return localStorage.getItem('progressBars') === 'true';
+}
+
+// Tiny plugin to draw NN% above each stacked bar
+const barPercentPlugin = {
+  id: 'barPercent',
+  afterDatasetsDraw(chart) {
+    if (!chart?.data?.labels?.length) return;
+    const { ctx } = chart;
+    const metaCompleted = chart.getDatasetMeta(0); // Completed
+    const metaRemaining = chart.getDatasetMeta(1); // Remaining
+    if (!metaCompleted || !metaRemaining) return;
+
+    const dsCompleted = chart.data.datasets[0].data;
+    const dsRemaining = chart.data.datasets[1].data;
+
+    chart.data.labels.forEach((_, i) => {
+      const done = Number(dsCompleted[i] || 0);
+      const rem  = Number(dsRemaining[i] || 0);
+      const total = done + rem;
+      if (!total) return;
+      const pct = Math.round((done / total) * 100);
+
+      const topEl = metaRemaining.data[i] || metaCompleted.data[i];
+      if (!topEl) return;
+
+      const x = topEl.x;
+      const y = (metaRemaining.data[i]?.y ?? metaCompleted.data[i]?.y) - 8;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.85)'; // gray-900 @ 85%
+      ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`${pct}%`, x, y);
+      ctx.restore();
+    });
+  }
+};
+
+/* =========================
    Global filters
    ========================= */
 const filters = {
@@ -363,11 +416,15 @@ async function loadDashboard(){
     }
   }
 
-  // ===== Work by Client (Remaining) — use labels[] + data[] from one sorted list =====
-  const agg = {};
+  // ===== Work by Client (Top 10) =====
+  // Build both totals and remaining so we can support stacked progress view
+  const aggTotal = {};
+  const aggRemain = {};
   for (const p of progressFiltered) {
-    agg[p.client_fk] = (agg[p.client_fk] || 0) + (p.remaining_to_due || 0);
+    aggTotal[p.client_fk]  = (aggTotal[p.client_fk]  || 0) + (p.qty_due || 0);
+    aggRemain[p.client_fk] = (aggRemain[p.client_fk] || 0) + (p.remaining_to_due || 0);
   }
+  // worst status per client (for remaining color)
   const worstByClient = {};
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
@@ -376,66 +433,126 @@ async function loadDashboard(){
       (cur === 'red' || s === 'red') ? 'red'
       : (cur === 'yellow' || s === 'yellow') ? 'yellow' : 'green';
   }
-  const ranked = Object.entries(agg).sort((a,b)=> b[1]-a[1]).slice(0,10);
-  const labels = ranked.map(([id]) => idTo[id]?.name || '—');
-  const values = ranked.map(([,v]) => v);
-  const statuses = ranked.map(([id]) => worstByClient[id] || 'green');
+  // rank by remaining, top 10
+  const ranked = Object.keys(aggTotal)
+    .map(cid => [cid, aggTotal[cid], aggRemain[cid]])
+    .sort((a,b) => (b[2] || 0) - (a[2] || 0))
+    .slice(0, 10);
 
-  const fills   = statuses.map(s => statusColors(s).fill);
-  const hovers  = statuses.map(s => statusColors(s).hover);
-  const borders = statuses.map(s => statusColors(s).stroke);
-  const yCfg = yScaleFor(values, 0.05);
+  const labels   = ranked.map(([cid]) => (idTo[cid]?.name || '—'));
+  const totals   = ranked.map(([, t]) => t || 0);
+  const remains  = ranked.map(([, , r]) => r || 0);
+  const completes = totals.map((t, i) => Math.max(0, t - remains[i]));
+  const statuses = ranked.map(([cid]) => worstByClient[cid] || 'green');
 
+  const remFills   = statuses.map(s => statusColors(s).fill);
+  const remHovers  = statuses.map(s => statusColors(s).hover);
+  const remBorders = statuses.map(s => statusColors(s).stroke);
+
+  // Neutral completed styling (gray) so Remaining color pops
+  const compFill   = 'rgba(107, 114, 128, 0.35)';  // gray-500 @ 35%
+  const compHover  = 'rgba(107, 114, 128, 0.55)';
+  const compBorder = '#6b7280';
+
+  const valuesForAxis = isProgressMode() ? totals : remains;
+  const yCfg = yScaleFor(valuesForAxis, 0.05);
   setCanvasHeight('byClientChart', 280);
+
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (byClientChart) byClientChart.destroy();
-    byClientChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,                                        // <— names here
-        datasets: [{
-          label: 'Remaining',
-          data: values,                                // <— numbers here (same order)
-          backgroundColor: fills,
-          hoverBackgroundColor: hovers,
-          borderColor: borders,
-          borderWidth: 1.5,
-          borderRadius: 10,
-          borderSkipped: false,
-          maxBarThickness: 44,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: { duration: 450, easing: 'easeOutCubic' },
-        plugins: {
-          legend: { display: false },
-          tooltip: { padding: 10, callbacks: { label: (c)=> `Remaining: ${fmt(c.parsed.y)}` } }
-        },
-        scales: {
-          x: {
-            type: 'category',
-            offset: true,                      // center bars over ticks
-            grid: { display: false },
-            ticks: {
-              autoSkip: false,                 // show every label
-              maxRotation: 0, minRotation: 0,
-              font: { size: 11 },
-              callback: (val, idx) => {
-                const label = labels[idx] ?? '';
-                return label.length > 18 ? label.slice(0, 16) + '…' : label;
-              }
+
+    const chartData = isProgressMode()
+      ? {
+          labels,
+          datasets: [
+            { // Completed
+              label: 'Completed',
+              data: completes,
+              backgroundColor: compFill,
+              hoverBackgroundColor: compHover,
+              borderColor: compBorder,
+              borderWidth: 1,
+              borderRadius: 10,
+              borderSkipped: false,
+              maxBarThickness: 44,
+              stack: 'totals',
+            },
+            { // Remaining (status colors)
+              label: 'Remaining',
+              data: remains,
+              backgroundColor: remFills,
+              hoverBackgroundColor: remHovers,
+              borderColor: remBorders,
+              borderWidth: 1.5,
+              borderRadius: 10,
+              borderSkipped: false,
+              maxBarThickness: 44,
+              stack: 'totals',
             }
-          },
-          y: {
-            min: yCfg.min, max: yCfg.max,
-            ticks: { stepSize: yCfg.stepSize },
-            grid: { color: 'rgba(17,24,39,0.08)' }
+          ],
+        }
+      : {
+          labels,
+          datasets: [{
+            label: 'Remaining',
+            data: remains,
+            backgroundColor: remFills,
+            hoverBackgroundColor: remHovers,
+            borderColor: remBorders,
+            borderWidth: 1.5,
+            borderRadius: 10,
+            borderSkipped: false,
+            maxBarThickness: 44,
+          }],
+        };
+
+    const commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 450, easing: 'easeOutCubic' },
+      plugins: {
+        legend: { display: isProgressMode() },
+        tooltip: {
+          padding: 10,
+          callbacks: {
+            title: (items) => labels[items[0].dataIndex] ?? '',
+            label: (c) => `${c.dataset.label}: ${fmt(c.parsed.y)}`
           }
         }
+      },
+      scales: {
+        x: {
+          type: 'category',
+          offset: true,
+          grid: { display: false },
+          ticks: {
+            autoSkip: false,
+            maxRotation: 0, minRotation: 0,
+            font: { size: 11 },
+            callback: (val, idx) => {
+              const label = labels[idx] ?? '';
+              return label.length > 18 ? label.slice(0,16) + '…' : label;
+            }
+          },
+          stacked: isProgressMode(),
+        },
+        y: {
+          min: yCfg.min, max: yCfg.max,
+          ticks: { stepSize: yCfg.stepSize },
+          grid: { color: 'rgba(17,24,39,0.08)' },
+          stacked: isProgressMode(),
+        }
       }
+    };
+
+    const plugins = isProgressMode() ? [barPercentPlugin] : [];
+
+    byClientChart = new Chart(ctx, {
+      type: 'bar',
+      data: chartData,
+      options: commonOptions,
+      plugins
     });
   }
 }
@@ -567,10 +684,10 @@ async function loadClientDetail(){
     clientDueChart = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels,                         // <— dates here
+        labels,                         // dates here
         datasets: [{
           label: 'Remaining',
-          data: values,                 // <— numbers here (same order)
+          data: values,                 // numbers here
           backgroundColor: fills,
           hoverBackgroundColor: hovers,
           borderColor: borders,
@@ -624,5 +741,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: labelsFinal');
+  console.log('Deliverables script build: progress-mode');
 });
