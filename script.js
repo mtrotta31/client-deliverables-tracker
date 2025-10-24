@@ -1,4 +1,4 @@
-// script.js — Weekly model + Due This Week + Log modal + Add Client UI
+// script.js — Weekly model + Due This Week + Log modal + Add/Edit Client fixes
 import { getSupabase } from './supabaseClient.js';
 
 /* ================= Utilities ================= */
@@ -91,7 +91,7 @@ const logClose = document.getElementById('logClose');
 const logCancel= document.getElementById('logCancel');
 const logClientName = document.getElementById('logClientName');
 
-/* Add Client modal (used on clients.html; safe no-ops on dashboard) */
+/* Add/Edit Client modal (used on clients.html; safe no-ops on dashboard) */
 const modal = document.getElementById('clientModal');
 const modalTitle = document.getElementById('clientModalTitle');
 const btnOpen = document.getElementById('btnAddClient');
@@ -106,24 +106,52 @@ const btnAddAddr = document.getElementById('btnAddAddr');
 const btnAddEmr  = document.getElementById('btnAddEmr');
 const clientsTableBody = document.getElementById('clientsBody');
 
-/* =============== Add/Edit Client UI =============== */
-function openClientModal(edit=null){
+/* =============== Add/Edit Client helpers =============== */
+function openClientModalBlank() {
   if (!modal) return;
   modal.classList.remove('hidden');
-  modalTitle.textContent = edit ? 'Edit Client' : 'Add Client';
+  modalTitle.textContent = 'Add Client';
   clientForm.reset();
-  clientForm.client_id.value = edit?.id || '';
-  if (addressesList){ addressesList.innerHTML = ''; addAddressRow(); }
-  if (emrsList){ emrsList.innerHTML = ''; addEmrRow(); }
-  if (edit){
-    clientForm.name.value = edit.name||'';
-    clientForm.total_lives.value = edit.total_lives||'';
-    clientForm.contact_name.value = edit.contact_name||'';
-    clientForm.contact_email.value = edit.contact_email||'';
-    clientForm.instructions.value = edit.instructions||'';
+  clientForm.client_id.value = '';
+  if (addressesList) { addressesList.innerHTML = ''; addAddressRow(); }
+  if (emrsList)      { emrsList.innerHTML = ''; addEmrRow(); }
+}
+function openClientModalPrefilled(client, addrs=[], emrs=[], activeCommit=null) {
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modalTitle.textContent = 'Edit Client';
+  clientForm.reset();
+
+  clientForm.client_id.value = client?.id || '';
+  clientForm.name.value = client?.name || '';
+  clientForm.total_lives.value = client?.total_lives || '';
+  clientForm.contact_name.value = client?.contact_name || '';
+  clientForm.contact_email.value = client?.contact_email || '';
+  clientForm.instructions.value = client?.instructions || '';
+
+  // addresses
+  if (addressesList) {
+    addressesList.innerHTML = '';
+    if (addrs.length === 0) addAddressRow();
+    addrs.forEach(a => addAddressRow(a));
+  }
+  // EMRs
+  if (emrsList) {
+    emrsList.innerHTML = '';
+    if (emrs.length === 0) addEmrRow();
+    emrs.forEach(e => addEmrRow(e));
+  }
+  // commitment (most recent active)
+  if (activeCommit) {
+    clientForm.weekly_qty.value = activeCommit.weekly_qty ?? '';
+    clientForm.start_week.value = activeCommit.start_week ?? '';
+  } else {
+    clientForm.weekly_qty.value = '';
+    clientForm.start_week.value = '';
   }
 }
 function closeClientModal(){ modal?.classList.add('hidden'); }
+
 function addAddressRow(a={}){
   if (!addrTpl || !addressesList) return;
   const node = addrTpl.content.cloneNode(true);
@@ -145,12 +173,43 @@ function addEmrRow(e={}){
   row.querySelector('.remove').onclick = ()=> row.remove();
   emrsList.appendChild(node);
 }
-btnOpen?.addEventListener('click', ()=> openClientModal());
+
+/* Buttons for Add Client (safe if missing on index.html) */
+btnOpen?.addEventListener('click', openClientModalBlank);
 btnClose?.addEventListener('click', closeClientModal);
 btnCancel?.addEventListener('click', closeClientModal);
 btnAddAddr?.addEventListener('click', ()=> addAddressRow());
 btnAddEmr?.addEventListener('click',  ()=> addEmrRow());
 
+/* Fetch + open modal for EDIT */
+async function openClientModalById(id){
+  const supabase = await getSupabase();
+  if (!supabase) return alert('Supabase not configured.');
+
+  const [{ data: client, error: e1 }] = await Promise.all([
+    supabase.from('clients').select('*').eq('id', id).single()
+  ]);
+  if (e1 || !client) { console.error(e1); return alert('Unable to load client.'); }
+
+  const [{ data: addrs }, { data: emrs }, { data: commits }] = await Promise.all([
+    supabase.from('client_addresses').select('line1,line2,city,state,zip').eq('client_fk', id).order('created_at'),
+    supabase.from('client_emrs').select('vendor,details').eq('client_fk', id).order('created_at'),
+    supabase.from('weekly_commitments')
+      .select('weekly_qty,start_week,active')
+      .eq('client_fk', id)
+      .order('start_week', { ascending: false })
+      .limit(1)
+  ]);
+  const activeCommit = (commits && commits[0] && commits[0].active) ? commits[0] : (commits ? commits[0] : null);
+  // Normalize ISO date for date input (YYYY-MM-DD)
+  if (activeCommit && activeCommit.start_week) {
+    activeCommit.start_week = String(activeCommit.start_week).slice(0,10);
+  }
+
+  openClientModalPrefilled(client, addrs||[], emrs||[], activeCommit||null);
+}
+
+/* Submit (create/update) */
 clientForm?.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const supabase = await getSupabase();
@@ -165,10 +224,23 @@ clientForm?.addEventListener('submit', async (e)=>{
     contract_executed: true
   };
   let clientId = clientForm.client_id.value || null;
+  let currentActiveCommit = null;
 
   if (clientId){
+    // Load existing active commitment so we can compare/keep if not changing
+    const { data: existing } = await supabase
+      .from('weekly_commitments')
+      .select('weekly_qty,start_week,active')
+      .eq('client_fk', clientId)
+      .eq('active', true)
+      .order('start_week', { ascending:false })
+      .limit(1);
+    currentActiveCommit = existing?.[0] || null;
+
     const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
     if (error) { console.error(error); return alert('Failed to update client.'); }
+
+    // Replace addresses/emrs with current form rows
     await supabase.from('client_addresses').delete().eq('client_fk', clientId);
     await supabase.from('client_emrs').delete().eq('client_fk', clientId);
   } else {
@@ -200,14 +272,41 @@ clientForm?.addEventListener('submit', async (e)=>{
     if (emrs.length) await supabase.from('client_emrs').insert(emrs);
   }
 
-  // optional commitment
-  const weekly_qty = Number(clientForm.weekly_qty?.value||0);
-  const start_week = clientForm.start_week?.value ? new Date(clientForm.start_week.value) : null;
-  if (weekly_qty && start_week){
-    const mon = mondayOf(start_week);
-    const iso = mon.toISOString().slice(0,10);
-    await supabase.from('weekly_commitments').update({ active:false }).eq('client_fk', clientId).eq('active', true);
-    await supabase.from('weekly_commitments').insert({ client_fk: clientId, weekly_qty, start_week: iso, active:true });
+  // Weekly commitment update:
+  // - If both inputs are blank, do nothing (keep existing)
+  // - If one is blank, reuse the value from the current active commitment when present
+  const inputQty   = clientForm.weekly_qty?.value ? Number(clientForm.weekly_qty.value) : null;
+  const inputStart = clientForm.start_week?.value ? clientForm.start_week.value : null;
+
+  if (inputQty !== null || inputStart !== null) {
+    const newQty   = (inputQty !== null)   ? inputQty   : (currentActiveCommit?.weekly_qty ?? 0);
+    let   newStart = (inputStart !== null) ? inputStart : (currentActiveCommit?.start_week ?? null);
+
+    if (!newStart) {
+      // default to next/this Monday if we must pick one
+      newStart = mondayOf(new Date()).toISOString().slice(0,10);
+    }
+
+    // Only insert if we actually have a quantity > 0
+    if (newQty > 0) {
+      // If there IS a current active commitment and values are unchanged, skip
+      const unchanged =
+        currentActiveCommit &&
+        Number(currentActiveCommit.weekly_qty) === Number(newQty) &&
+        String(currentActiveCommit.start_week).slice(0,10) === String(newStart).slice(0,10);
+
+      if (!unchanged) {
+        if (currentActiveCommit) {
+          await supabase.from('weekly_commitments').update({ active:false }).eq('client_fk', clientId).eq('active', true);
+        }
+        await supabase.from('weekly_commitments').insert({
+          client_fk: clientId,
+          weekly_qty: newQty,
+          start_week: newStart,
+          active: true
+        });
+      }
+    }
   }
 
   closeClientModal();
@@ -216,9 +315,9 @@ clientForm?.addEventListener('submit', async (e)=>{
   alert('Saved.');
 });
 
-/* =============== Dashboard Weekly Model =============== */
+/* =============== Dashboard: Weekly Model =============== */
 async function loadDashboard(){
-  if (!kpiTotal) return;
+  if (!kpiTotal) return; // Not on dashboard
   const supabase = await getSupabase();
   if (!supabase){ kpiTotal.setAttribute('value','—'); kpiCompleted.setAttribute('value','—'); kpiRemaining.setAttribute('value','—'); return; }
 
@@ -282,13 +381,12 @@ async function loadDashboard(){
   kpiCompleted?.setAttribute('value', fmt(totalDone));
   kpiRemaining?.setAttribute('value', fmt(totalRemain));
 
-  // Chart
+  // Chart + Table
   renderByClientChart(rows);
-
-  // Due this week table
   renderDueThisWeek(rows);
 }
 
+/* =============== Chart (scrollable) =============== */
 function renderByClientChart(rows){
   const labels    = rows.map(r=> r.name);
   const completes = rows.map(r=> Math.max(0, r.required - r.remaining));
@@ -302,14 +400,13 @@ function renderByClientChart(rows){
   const remHovers  = statuses.map(s=> statusColors(s).hover);
   const remBorders = statuses.map(s=> statusColors(s).stroke);
 
-  // --- Sizing: make the inner wrapper/canvas wide enough to scroll ---
-  const widthPx = Math.max(1100, labels.length * 140); // ~140px per client
+  // width per bar; height fixed by container
+  const widthPx = Math.max(1100, labels.length * 140);
   const widthDiv = document.getElementById('chartWidth');
   const canvas   = document.getElementById('byClientChart');
   if (widthDiv) widthDiv.style.width = widthPx + 'px';
-  if (canvas)   canvas.width = widthPx;               // helps Chart.js layout
+  if (canvas)   canvas.width = widthPx;
 
-  // Y-axis based on total stack height (completed+remaining)
   const totalsForAxis = labels.map((_,i)=> completes[i]+remains[i]);
   const yCfg = yScaleFor(totalsForAxis, 0.05);
 
@@ -322,36 +419,16 @@ function renderByClientChart(rows){
     data: {
       labels,
       datasets: [
-        {
-          label:'Completed',
-          data: completes,
-          backgroundColor: compFill,
-          hoverBackgroundColor: compHover,
-          borderColor: compBorder,
-          borderWidth: 1,
-          borderRadius: 10,
-          borderSkipped:false,
-          maxBarThickness: 44,
-          stack:'totals'
-        },
-        {
-          label:'Remaining',
-          data: remains,
-          backgroundColor: remFills,
-          hoverBackgroundColor: remHovers,
-          borderColor: remBorders,
-          borderWidth: 1.5,
-          borderRadius: 10,
-          borderSkipped:false,
-          maxBarThickness: 44,
-          stack:'totals'
-        }
+        { label:'Completed', data: completes,
+          backgroundColor: compFill, hoverBackgroundColor: compHover,
+          borderColor: compBorder, borderWidth: 1, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' },
+        { label:'Remaining', data: remains,
+          backgroundColor: remFills, hoverBackgroundColor: remHovers,
+          borderColor: remBorders, borderWidth: 1.5, borderRadius: 10, borderSkipped:false, maxBarThickness: 44, stack:'totals' }
       ]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,     // height controlled by container
-      animation: { duration: 400 },
+      responsive:true, maintainAspectRatio:false, animation:{ duration: 400 },
       plugins:{
         legend:{ display:true },
         tooltip:{
@@ -374,13 +451,9 @@ function renderByClientChart(rows){
       },
       scales:{
         x:{
-          stacked:true,
-          grid:{ display:false },
+          stacked:true, grid:{display:false},
           ticks:{
-            autoSkip:false,
-            maxRotation:0,
-            minRotation:0,
-            font:{ size:11 },
+            autoSkip:false, maxRotation:0, minRotation:0, font:{size:11},
             callback:(value, index)=>{
               const label = labels[index] || '';
               return label.length > 16 ? label.slice(0,16) + '…' : label;
@@ -388,10 +461,7 @@ function renderByClientChart(rows){
           }
         },
         y:{
-          stacked:true,
-          min:yCfg.min,
-          max:yCfg.max,
-          ticks:{ stepSize:yCfg.stepSize },
+          stacked:true, min:yCfg.min, max:yCfg.max, ticks:{ stepSize:yCfg.stepSize },
           grid:{ color:'rgba(17,24,39,0.08)' }
         }
       }
@@ -400,6 +470,7 @@ function renderByClientChart(rows){
   });
 }
 
+/* =============== Due This Week table =============== */
 function renderDueThisWeek(rows){
   if (!dueBody) return;
   const items = rows.filter(r=> r.required>0).sort((a,b)=> b.remaining - a.remaining);
@@ -496,9 +567,7 @@ async function loadClientsList(){
     const btn = e.target.closest('button[data-edit]');
     if (!btn) return;
     const id = btn.getAttribute('data-edit');
-    const supabase = await getSupabase();
-    const { data: c } = await supabase.from('clients').select('*').eq('id', id).single();
-    openClientModal(c);
+    await openClientModalById(id);
   };
 }
 
@@ -521,5 +590,5 @@ window.addEventListener('DOMContentLoaded', ()=>{
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Dashboard weekly build loaded');
+  console.log('Weekly build + edit modal fixes loaded');
 });
