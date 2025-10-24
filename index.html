@@ -3,131 +3,146 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Deliverables Tracker — Dashboard</title>
+  <title>Deliverables Tracker — Clients</title>
 
+  <!-- Styles -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="./style.css"/>
 
+  <!-- Web Components -->
   <script defer src="./navbar.js"></script>
-  <script defer src="./kpi-card.js"></script>
   <script defer src="./status-badge.js"></script>
   <script defer src="./footer.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen flex flex-col">
   <app-navbar></app-navbar>
 
   <main class="flex-1">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-semibold">Dashboard</h1>
-        <label class="text-sm inline-flex items-center gap-2">
-          <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
-          <span>Contracted only</span>
-        </label>
+
+      <!-- Header actions -->
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-2xl font-semibold">Clients</h1>
+        <div class="flex items-center gap-6">
+          <label class="text-sm inline-flex items-center gap-2">
+            <input id="filterContracted" type="checkbox" class="h-4 w-4" checked />
+            <span>Contracted only</span>
+          </label>
+          <button id="btnAddClient" class="px-3 py-2 rounded bg-indigo-600 text-white text-sm">Add Client</button>
+        </div>
       </div>
 
-      <!-- KPIs -->
-      <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-6">
-        <kpi-card id="kpi-total" label="Total Due" value="—"></kpi-card>
-        <kpi-card id="kpi-completed" label="Completed" value="—"></kpi-card>
-        <kpi-card id="kpi-remaining" label="Remaining" value="—"></kpi-card>
-        <kpi-card id="kpi-friday" label="Due This Friday" value="—"></kpi-card>
+      <!-- Clients table -->
+      <div class="card overflow-auto">
+        <table>
+          <thead>
+            <tr class="text-xs text-gray-500">
+              <th>Name</th>
+              <th>Total Lives</th>
+              <th>Weekly Commitment</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="clientsBody">
+            <tr><td colspan="4" class="text-sm text-gray-500 py-4">Loading…</td></tr>
+          </tbody>
+        </table>
       </div>
 
-      <!-- CSV Importer -->
-      <section class="mt-10">
-        <div class="card">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold">Import CSV</h2>
-            <div class="text-sm text-gray-500">One row per client; due-date only</div>
+      <!-- Add/Edit Client Modal -->
+      <div id="clientModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm hidden z-50">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-3xl mx-auto mt-16 p-6 overflow-y-auto max-h-[80vh]">
+          <div class="flex items-center justify-between mb-4">
+            <h2 id="clientModalTitle" class="text-xl font-semibold">Add Client</h2>
+            <button id="clientModalClose" class="text-gray-500 hover:text-gray-700">✕</button>
           </div>
-          <div class="mt-4 flex items-center gap-3">
-            <input id="csvFile" type="file" accept=".csv" class="text-sm"/>
-            <button id="previewBtn" class="px-3 py-2 rounded-md bg-gray-200 text-gray-900 text-sm">Preview</button>
-            <button id="importBtn" class="px-3 py-2 rounded-md bg-indigo-600 text-white text-sm">Import to Supabase</button>
-          </div>
-          <p id="importSummary" class="text-sm text-gray-600 mt-2"></p>
 
-          <div class="overflow-auto mt-4">
-            <table id="previewTable" class="hidden">
-              <thead>
-                <tr class="text-xs text-gray-500">
-                  <th>client_id</th>
-                  <th>client_name</th>
-                  <th>due_date</th>
-                  <th>qty_due</th>
-                  <th>contract_executed</th>
-                  <th>total_lives</th>
-                </tr>
-              </thead>
-              <tbody id="previewTbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+          <form id="clientForm" class="space-y-6">
+            <input type="hidden" name="client_id" />
 
-      <!-- Work by Client (Remaining) -->
-      <section class="mt-10">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Work by Client (Remaining)</h2>
-          <span class="text-sm text-gray-500">Top 10 by remaining to due date</span>
-        </div>
-        <div class="card mt-4">
-          <canvas id="byClientChart" height="120"></canvas>
-        </div>
-      </section>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label class="text-sm">Client Name
+                <input name="name" class="w-full border rounded px-3 py-2" required />
+              </label>
+              <label class="text-sm">Total Lives
+                <input name="total_lives" type="number" class="w-full border rounded px-3 py-2" />
+              </label>
+              <label class="text-sm">Contact Name
+                <input name="contact_name" class="w-full border rounded px-3 py-2" />
+              </label>
+              <label class="text-sm">Contact Email
+                <input name="contact_email" type="email" class="w-full border rounded px-3 py-2" />
+              </label>
+            </div>
 
-      <!-- Due this Friday (by client) -->
-      <section class="mt-10">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Due This Friday — By Client</h2>
-          <a class="text-sm text-indigo-600 hover:underline" href="./clients.html">View all clients</a>
-        </div>
-        <div class="card mt-4 overflow-auto">
-          <table>
-            <thead>
-              <tr class="text-xs text-gray-500">
-                <th>Client</th>
-                <th>Qty Due (Fri)</th>
-                <th>Remaining</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="friday-body"></tbody>
-          </table>
-        </div>
-      </section>
+            <label class="text-sm block">Instructions / Notes
+              <textarea name="instructions" rows="3" class="w-full border rounded px-3 py-2"></textarea>
+            </label>
 
-      <!-- Upcoming due dates (general) -->
-      <section class="mt-10">
-        <h2 class="text-lg font-semibold">Upcoming Due Dates</h2>
-        <div class="card mt-4 overflow-auto">
-          <table>
-            <thead>
-              <tr class="text-xs text-gray-500">
-                <th>Client</th>
-                <th>Due Date</th>
-                <th>Qty Due</th>
-                <th>Completed</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="due-soon-body"></tbody>
-          </table>
+            <!-- Addresses repeater -->
+            <div>
+              <div class="flex items-center justify-between">
+                <h3 class="font-medium">Addresses</h3>
+                <button type="button" id="btnAddAddr" class="text-indigo-600 text-sm">+ Add address</button>
+              </div>
+              <div id="addressesList" class="space-y-2 mt-2"></div>
+            </div>
+
+            <!-- EMRs repeater -->
+            <div>
+              <div class="flex items-center justify-between">
+                <h3 class="font-medium">EMR Systems</h3>
+                <button type="button" id="btnAddEmr" class="text-indigo-600 text-sm">+ Add EMR</button>
+              </div>
+              <div id="emrsList" class="space-y-2 mt-2"></div>
+            </div>
+
+            <!-- Weekly commitment -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label class="text-sm">Weekly Commitment (qty/week)
+                <input name="weekly_qty" type="number" min="0" class="w-full border rounded px-3 py-2" />
+              </label>
+              <label class="text-sm">Start Monday
+                <input name="start_week" type="date" class="w-full border rounded px-3 py-2" />
+              </label>
+            </div>
+
+            <div class="flex justify-end gap-3">
+              <button type="button" id="clientCancel" class="px-4 py-2 rounded border">Cancel</button>
+              <button type="submit" class="px-4 py-2 rounded bg-gray-900 text-white">Save</button>
+            </div>
+          </form>
         </div>
-      </section>
+      </div>
+
+      <!-- Row templates -->
+      <template id="addrRowTpl">
+        <div class="grid grid-cols-12 gap-2 items-center">
+          <input name="line1" placeholder="Line 1" class="col-span-4 border rounded px-2 py-1">
+          <input name="line2" placeholder="Line 2" class="col-span-3 border rounded px-2 py-1">
+          <input name="city" placeholder="City" class="col-span-2 border rounded px-2 py-1">
+          <input name="state" placeholder="ST" class="col-span-1 border rounded px-2 py-1">
+          <input name="zip" placeholder="ZIP" class="col-span-1 border rounded px-2 py-1">
+          <button type="button" class="col-span-1 text-sm text-red-600 remove">Remove</button>
+        </div>
+      </template>
+
+      <template id="emrRowTpl">
+        <div class="grid grid-cols-12 gap-2 items-center">
+          <input name="vendor" placeholder="Vendor" class="col-span-5 border rounded px-2 py-1">
+          <input name="details" placeholder="Notes" class="col-span-6 border rounded px-2 py-1">
+          <button type="button" class="col-span-1 text-sm text-red-600 remove">Remove</button>
+        </div>
+      </template>
+
     </div>
   </main>
 
   <app-footer></app-footer>
 
-  <script type="module" src="./env.js"></script>
-  <script type="module" src="./supabaseClient.js"></script>
-  <script type="module" src="./script.js"></script>
+  <!-- App (modules) -->
+  <script type="module" src="./env.js?v=weekly-live-2"></script>
+  <script type="module" src="./supabaseClient.js?v=weekly-live-2"></script>
+  <script type="module" src="./script.js?v=weekly-live-2"></script>
 </body>
 </html>
