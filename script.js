@@ -1,4 +1,4 @@
-// script.js
+// script.js — live progress view by default
 import { getSupabase } from './supabaseClient.js';
 
 /* =========================
@@ -52,22 +52,8 @@ function setCanvasHeight(id, px){
 }
 
 /* =========================
-   Feature flag: Progress mode (stacked bars + % labels)
+   Percent labels for stacked bars
    ========================= */
-function isProgressMode() {
-  const q = new URLSearchParams(location.search);
-  if (q.get('progress') === '1') {
-    localStorage.setItem('progressBars', 'true');
-    return true;
-  }
-  if (q.get('progress') === '0') {
-    localStorage.setItem('progressBars', 'false');
-    return false;
-  }
-  return localStorage.getItem('progressBars') === 'true';
-}
-
-// Tiny plugin to draw NN% above each stacked bar
 const barPercentPlugin = {
   id: 'barPercent',
   afterDatasetsDraw(chart) {
@@ -86,6 +72,9 @@ const barPercentPlugin = {
       const total = done + rem;
       if (!total) return;
       const pct = Math.round((done / total) * 100);
+
+      // Only show when informative
+      if (pct === 0 || pct === 100) return;
 
       const topEl = metaRemaining.data[i] || metaCompleted.data[i];
       if (!topEl) return;
@@ -416,15 +405,16 @@ async function loadDashboard(){
     }
   }
 
-  // ===== Work by Client (Top 10) =====
-  // Build both totals and remaining so we can support stacked progress view
+  // ===== Work by Client (Top 10) — Stacked progress by default =====
+  // Build totals and remaining per client
   const aggTotal = {};
   const aggRemain = {};
   for (const p of progressFiltered) {
     aggTotal[p.client_fk]  = (aggTotal[p.client_fk]  || 0) + (p.qty_due || 0);
     aggRemain[p.client_fk] = (aggRemain[p.client_fk] || 0) + (p.remaining_to_due || 0);
   }
-  // worst status per client (for remaining color)
+
+  // Worst status per client (colors for Remaining)
   const worstByClient = {};
   for (const p of progressFiltered) {
     const s = simpleStatus(p.remaining_to_due, p.due_date);
@@ -433,68 +423,68 @@ async function loadDashboard(){
       (cur === 'red' || s === 'red') ? 'red'
       : (cur === 'yellow' || s === 'yellow') ? 'yellow' : 'green';
   }
-  // rank by remaining, top 10
+
+  // Earliest due per client (for tooltip context)
+  const earliestDueByClient = {};
+  for (const p of progressFiltered) {
+    const cur = earliestDueByClient[p.client_fk];
+    if (!cur || p.due_date < cur) earliestDueByClient[p.client_fk] = p.due_date;
+  }
+
+  // Rank by remaining, top 10
   const ranked = Object.keys(aggTotal)
     .map(cid => [cid, aggTotal[cid], aggRemain[cid]])
     .sort((a,b) => (b[2] || 0) - (a[2] || 0))
     .slice(0, 10);
 
-  const labels   = ranked.map(([cid]) => (idTo[cid]?.name || '—'));
-  const totals   = ranked.map(([, t]) => t || 0);
-  const remains  = ranked.map(([, , r]) => r || 0);
+  // Parallel arrays for labels/data
+  const labels    = ranked.map(([cid]) => (idTo[cid]?.name || '—'));
+  const totals    = ranked.map(([, t]) => t || 0);
+  const remains   = ranked.map(([, , r]) => r || 0);
   const completes = totals.map((t, i) => Math.max(0, t - remains[i]));
-  const statuses = ranked.map(([cid]) => worstByClient[cid] || 'green');
+  const statuses  = ranked.map(([cid]) => worstByClient[cid] || 'green');
 
   const remFills   = statuses.map(s => statusColors(s).fill);
   const remHovers  = statuses.map(s => statusColors(s).hover);
   const remBorders = statuses.map(s => statusColors(s).stroke);
 
-  // Neutral completed styling (gray) so Remaining color pops
-  const compFill   = 'rgba(107, 114, 128, 0.35)';  // gray-500 @ 35%
-  const compHover  = 'rgba(107, 114, 128, 0.55)';
+  // Completed styling (slightly more visible than before)
+  const compFill   = 'rgba(107, 114, 128, 0.50)';  // gray-500 @ 50%
+  const compHover  = 'rgba(107, 114, 128, 0.70)';
   const compBorder = '#6b7280';
 
-  const valuesForAxis = isProgressMode() ? totals : remains;
-  const yCfg = yScaleFor(valuesForAxis, 0.05);
+  // Tooltip context: next due & pace
+  const nextDue   = ranked.map(([cid]) => earliestDueByClient[cid] || null);
+  const daysLeft  = nextDue.map(d => (d ? Math.max(0, daysUntil(d)) : null));
+  const needPerDay = remains.map((rem, i) => {
+    const d = daysLeft[i];
+    return d != null && d > 0 ? Math.ceil(rem / d) : null;
+  });
+
+  const yCfg = yScaleFor(totals, 0.05); // stacked → axis should fit totals
   setCanvasHeight('byClientChart', 280);
 
   const ctx = document.getElementById('byClientChart')?.getContext('2d');
   if (ctx && window.Chart){
     if (byClientChart) byClientChart.destroy();
-
-    const chartData = isProgressMode()
-      ? {
-          labels,
-          datasets: [
-            { // Completed
-              label: 'Completed',
-              data: completes,
-              backgroundColor: compFill,
-              hoverBackgroundColor: compHover,
-              borderColor: compBorder,
-              borderWidth: 1,
-              borderRadius: 10,
-              borderSkipped: false,
-              maxBarThickness: 44,
-              stack: 'totals',
-            },
-            { // Remaining (status colors)
-              label: 'Remaining',
-              data: remains,
-              backgroundColor: remFills,
-              hoverBackgroundColor: remHovers,
-              borderColor: remBorders,
-              borderWidth: 1.5,
-              borderRadius: 10,
-              borderSkipped: false,
-              maxBarThickness: 44,
-              stack: 'totals',
-            }
-          ],
-        }
-      : {
-          labels,
-          datasets: [{
+    byClientChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { // Completed
+            label: 'Completed',
+            data: completes,
+            backgroundColor: compFill,
+            hoverBackgroundColor: compHover,
+            borderColor: compBorder,
+            borderWidth: 1,
+            borderRadius: 10,
+            borderSkipped: false,
+            maxBarThickness: 44,
+            stack: 'totals',
+          },
+          { // Remaining (status colors)
             label: 'Remaining',
             data: remains,
             backgroundColor: remFills,
@@ -504,55 +494,70 @@ async function loadDashboard(){
             borderRadius: 10,
             borderSkipped: false,
             maxBarThickness: 44,
-          }],
-        };
-
-    const commonOptions = {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 450, easing: 'easeOutCubic' },
-      plugins: {
-        legend: { display: isProgressMode() },
-        tooltip: {
-          padding: 10,
-          callbacks: {
-            title: (items) => labels[items[0].dataIndex] ?? '',
-            label: (c) => `${c.dataset.label}: ${fmt(c.parsed.y)}`
+            stack: 'totals',
+          }
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 450, easing: 'easeOutCubic' },
+        plugins: {
+          legend: { display: true },
+          tooltip: {
+            padding: 12,
+            displayColors: false,
+            callbacks: {
+              title: (items) => labels[items[0].dataIndex] ?? '',
+              label: (ctx) => {
+                const i = ctx.dataIndex;
+                if (ctx.dataset.label === 'Completed') {
+                  const pct = Math.round((completes[i] / Math.max(1, totals[i])) * 100);
+                  return `Completed: ${fmt(completes[i])} (${pct}%)`;
+                }
+                if (ctx.dataset.label === 'Remaining') {
+                  return `Remaining: ${fmt(remains[i])}`;
+                }
+                return '';
+              },
+              afterBody: (items) => {
+                const i = items[0].dataIndex;
+                const lines = [`Total due: ${fmt(totals[i])}`];
+                if (nextDue[i]) {
+                  lines.push(`Next due: ${nextDue[i]}`);
+                  if (daysLeft[i] != null)  lines.push(`Days to next due: ${daysLeft[i]}`);
+                  if (needPerDay[i] != null) lines.push(`Need/day to next due: ${fmt(needPerDay[i])}`);
+                }
+                return lines;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'category',
+            offset: true,
+            grid: { display: false },
+            ticks: {
+              autoSkip: false,
+              maxRotation: 0, minRotation: 0,
+              font: { size: 11 },
+              callback: (val, idx) => {
+                const label = labels[idx] ?? '';
+                return label.length > 18 ? label.slice(0,16) + '…' : label;
+              }
+            },
+            stacked: true,
+          },
+          y: {
+            min: yCfg.min, max: yCfg.max,
+            ticks: { stepSize: yCfg.stepSize },
+            grid: { color: 'rgba(17,24,39,0.08)' },
+            stacked: true,
           }
         }
       },
-      scales: {
-        x: {
-          type: 'category',
-          offset: true,
-          grid: { display: false },
-          ticks: {
-            autoSkip: false,
-            maxRotation: 0, minRotation: 0,
-            font: { size: 11 },
-            callback: (val, idx) => {
-              const label = labels[idx] ?? '';
-              return label.length > 18 ? label.slice(0,16) + '…' : label;
-            }
-          },
-          stacked: isProgressMode(),
-        },
-        y: {
-          min: yCfg.min, max: yCfg.max,
-          ticks: { stepSize: yCfg.stepSize },
-          grid: { color: 'rgba(17,24,39,0.08)' },
-          stacked: isProgressMode(),
-        }
-      }
-    };
-
-    const plugins = isProgressMode() ? [barPercentPlugin] : [];
-
-    byClientChart = new Chart(ctx, {
-      type: 'bar',
-      data: chartData,
-      options: commonOptions,
-      plugins
+      plugins: [barPercentPlugin]
     });
   }
 }
@@ -741,5 +746,5 @@ window.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Deliverables script build: progress-mode');
+  console.log('Deliverables script build: live-progress');
 });
