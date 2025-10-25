@@ -44,13 +44,13 @@
 
   <app-footer></app-footer>
 
-  <!-- Modal (scrollable) -->
+  <!-- Add/Edit Client Modal (scrollable with sticky action bar) -->
   <div id="clientModal" class="fixed inset-0 z-50 hidden">
     <!-- backdrop -->
     <div class="absolute inset-0 bg-black/40"></div>
     <!-- dialog -->
     <div class="relative mx-auto my-6 w-full max-w-4xl">
-      <div class="bg-white rounded-2xl shadow-xl max-h-[85vh] overflow-y-auto">
+      <div class="bg-white rounded-2xl shadow-xl max-h/[85vh] max-h-[85vh] overflow-y-auto">
         <div class="sticky top-0 z-10 bg-white/95 backdrop-blur border-b rounded-t-2xl px-6 py-4 flex items-center justify-between">
           <h3 id="clientModalTitle" class="text-lg font-semibold">Add Client</h3>
           <button id="clientModalClose" class="text-gray-500 hover:text-gray-700">✕</button>
