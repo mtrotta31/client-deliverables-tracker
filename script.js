@@ -1,4 +1,6 @@
-// script.js — Weekly model + Due This Week + Log modal + Add/Edit Client (date-aware weekly commitments)
+// script.js — unified logic for Dashboard, Clients, and Client Detail pages.
+// Includes: weekly model, date-aware commitments, addresses/EMRs CRUD, charts, and log modal.
+
 import { getSupabase } from './supabaseClient.js';
 
 /* ================= Utilities ================= */
@@ -6,22 +8,22 @@ const fmt = (n)=> Number(n||0).toLocaleString();
 
 function mondayOf(date) {
   const d = new Date(date);
-  const day = d.getDay();              // 0..6 (Sun..Sat)
-  const back = (day + 6) % 7;          // push back to Monday
+  const day = d.getDay();                // 0..6 (Sun..Sat)
+  const back = (day + 6) % 7;            // push back to Monday
   d.setHours(0,0,0,0);
   d.setDate(d.getDate() - back);
   return d;
 }
 function fridayEndOf(monday) {
   const f = new Date(monday);
-  f.setDate(f.getDate() + 5);          // Saturday 00:00
+  f.setDate(f.getDate() + 5);            // Saturday 00:00
   f.setHours(0,0,0,0);
-  f.setMilliseconds(-1);               // Friday 23:59:59.999
+  f.setMilliseconds(-1);                 // Friday 23:59:59.999
   return f;
 }
 function daysLeftThisWeek(today){
-  const dow = today.getDay();          // Mon=1 ... Fri=5
-  if (dow === 6 || dow === 0) return 5;
+  const dow = today.getDay();
+  if (dow === 6 || dow === 0) return 5;  // weekend → show full 5 days for planning
   return Math.max(1, 6 - dow);
 }
 function yScaleFor(values, pad=0.06){
@@ -77,21 +79,24 @@ const barPercentPlugin = {
   }
 };
 
-/* =============== DOM refs =============== */
+/* =============== DOM refs (optional per page) =============== */
+// Dashboard KPIs
 const kpiTotal     = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
+// Dashboard table for “Due this week”
 const dueBody      = document.querySelector('#dueThisWeekBody');
+// Dashboard chart
 let byClientChart;
 
-/* Log modal */
+// Global Log modal (present on index.html and client-detail.html)
 const logModal = document.getElementById('logModal');
 const logForm  = document.getElementById('logForm');
 const logClose = document.getElementById('logClose');
 const logCancel= document.getElementById('logCancel');
 const logClientName = document.getElementById('logClientName');
 
-/* Add/Edit Client modal (used on clients.html; safe no-ops on dashboard) */
+// Clients page modal + widgets
 const modal = document.getElementById('clientModal');
 const modalTitle = document.getElementById('clientModalTitle');
 const btnOpen = document.getElementById('btnAddClient');
@@ -127,13 +132,14 @@ function setWeeklyInputValues({ weekly_qty, start_week }) {
   if (startEl) startEl.value = start_week ? String(start_week).slice(0,10) : '';
 }
 
-/* ---------- Add/Edit Client helpers ---------- */
+/* ---------- Add/Edit Client modal helpers ---------- */
 function openClientModalBlank() {
   if (!modal) return;
   modal.classList.remove('hidden');
   modalTitle.textContent = 'Add Client';
   clientForm.reset();
   clientForm.client_id.value = '';
+  document.getElementById('contract_executed')?.removeAttribute('checked');
   if (addressesList) { addressesList.innerHTML = ''; addAddressRow(); }
   if (emrsList)      { emrsList.innerHTML = ''; addEmrRow(); }
   setWeeklyInputValues({ weekly_qty:'', start_week:'' });
@@ -150,9 +156,11 @@ function openClientModalPrefilled(client, addrs=[], emrs=[], activeCommit=null) 
   clientForm.contact_name.value = client?.contact_name || '';
   clientForm.contact_email.value = client?.contact_email || '';
   clientForm.instructions.value = client?.instructions || '';
+  const chk = document.getElementById('contract_executed');
+  if (chk) chk.checked = !!client?.contract_executed;
 
   if (addressesList) { addressesList.innerHTML = ''; (addrs.length?addrs:[{}]).forEach(a=>addAddressRow(a)); }
-  if (emrsList) { emrsList.innerHTML = ''; (emrs.length?emrs:[{}]).forEach(e=>addEmrRow(e)); }
+  if (emrsList)      { emrsList.innerHTML = ''; (emrs.length?emrs:[{}]).forEach(e=>addEmrRow(e)); }
 
   setWeeklyInputValues(activeCommit ? {
     weekly_qty: activeCommit.weekly_qty,
@@ -161,48 +169,46 @@ function openClientModalPrefilled(client, addrs=[], emrs=[], activeCommit=null) 
 }
 function closeClientModal(){ modal?.classList.add('hidden'); }
 
-function addAddressRow(a={}){
+function addAddressRow(a = {}) {
   if (!addrTpl || !addressesList) return;
   const node = addrTpl.content.cloneNode(true);
-  const row = node.querySelector('.grid');
-  row.querySelector('[name=line1]').value = a.line1||'';
-  row.querySelector('[name=line2]').value = a.line2||'';
-  row.querySelector('[name=city]').value  = a.city||'';
-  row.querySelector('[name=state]').value = a.state||'';
-  row.querySelector('[name=zip]').value   = a.zip||'';
-  row.querySelector('.remove').onclick = ()=> row.remove();
+  const row  = node.querySelector('.grid');
+  row.querySelector('[name=line1]').value = a.line1 || '';
+  row.querySelector('[name=line2]').value = a.line2 || '';
+  row.querySelector('[name=city]').value  = a.city  || '';
+  row.querySelector('[name=state]').value = a.state || '';
+  row.querySelector('[name=zip]').value   = a.zip   || '';
+  row.querySelector('.remove').onclick = () => row.remove();
   addressesList.appendChild(node);
 }
-function addEmrRow(e={}){
+function addEmrRow(e = {}) {
   if (!emrTpl || !emrsList) return;
   const node = emrTpl.content.cloneNode(true);
-  const row = node.querySelector('.grid');
-  row.querySelector('[name=vendor]').value  = e.vendor||'';
-  row.querySelector('[name=details]').value = e.details||'';
-  row.querySelector('.remove').onclick = ()=> row.remove();
+  const row  = node.querySelector('.grid');
+  row.querySelector('[name=vendor]').value  = e.vendor  || '';
+  row.querySelector('[name=details]').value = e.details || '';
+  row.querySelector('.remove').onclick = () => row.remove();
   emrsList.appendChild(node);
 }
 
-/* Buttons */
 btnOpen?.addEventListener('click', openClientModalBlank);
 btnClose?.addEventListener('click', closeClientModal);
 btnCancel?.addEventListener('click', closeClientModal);
 btnAddAddr?.addEventListener('click', ()=> addAddressRow());
 btnAddEmr?.addEventListener('click',  ()=> addEmrRow());
 
-/* Load data for Edit */
+/* Load client data for Edit */
 async function openClientModalById(id){
   const supabase = await getSupabase(); if (!supabase) return alert('Supabase not configured.');
-
   const { data: client, error:e1 } = await supabase.from('clients').select('*').eq('id', id).single();
   if (e1 || !client){ console.error(e1); return alert('Unable to load client.'); }
-
   const [{ data:addrs }, { data:emrs }, { data:commits }] = await Promise.all([
     supabase.from('client_addresses').select('line1,line2,city,state,zip').eq('client_fk', id).order('created_at'),
     supabase.from('client_emrs').select('vendor,details').eq('client_fk', id).order('created_at'),
-    supabase.from('weekly_commitments').select('weekly_qty,start_week,active').eq('client_fk', id).order('start_week', { ascending:false }).limit(1)
+    supabase.from('weekly_commitments').select('weekly_qty,start_week,active').eq('client_fk', id)
+      .order('start_week', { ascending:false }).limit(1)
   ]);
-  const activeCommit = (commits && commits[0]) ? commits[0] : null;
+  const activeCommit = commits?.[0] || null;
   if (activeCommit && activeCommit.start_week) activeCommit.start_week = String(activeCommit.start_week).slice(0,10);
   openClientModalPrefilled(client, addrs||[], emrs||[], activeCommit);
 }
@@ -218,7 +224,7 @@ clientForm?.addEventListener('submit', async (e)=>{
     contact_name: clientForm.contact_name.value.trim() || null,
     contact_email: clientForm.contact_email.value.trim() || null,
     instructions: clientForm.instructions.value.trim() || null,
-    contract_executed: true
+    contract_executed: !!document.getElementById('contract_executed')?.checked
   };
 
   let clientId = clientForm.client_id.value || null;
@@ -237,34 +243,36 @@ clientForm?.addEventListener('submit', async (e)=>{
     const { error:upErr } = await supabase.from('clients').update(payload).eq('id', clientId);
     if (upErr){ console.error(upErr); return alert('Failed to update client.'); }
 
-    // Only touch addresses/EMRs if those sections exist on the page
-    if (addressesList){
+    // Addresses (if present)
+    if (addressesList) {
       await supabase.from('client_addresses').delete().eq('client_fk', clientId);
-      const addrs=[...addressesList.querySelectorAll('.grid')].map(r=>({
-        client_fk: clientId,
-        line1:  r.querySelector('[name=line1]').value.trim()||null,
-        line2:  r.querySelector('[name=line2]').value.trim()||null,
-        city:   r.querySelector('[name=city]').value.trim()||null,
-        state:  r.querySelector('[name=state]').value.trim()||null,
-        zip:    r.querySelector('[name=zip]').value.trim()||null,
-      })).filter(a=>a.line1);
-      if(addrs.length){
-        const { error:addrErr } = await supabase.from('client_addresses').insert(addrs);
+      const addrs = [...addressesList.querySelectorAll('.grid')].map(r => {
+        const line1 = r.querySelector('[name=line1]')?.value?.trim() || '';
+        const line2 = r.querySelector('[name=line2]')?.value?.trim() || '';
+        const city  = r.querySelector('[name=city]') ?.value?.trim() || '';
+        const state = r.querySelector('[name=state]')?.value?.trim() || '';
+        const zip   = r.querySelector('[name=zip]')  ?.value?.trim() || '';
+        return { client_fk: clientId, line1, line2, city, state, zip };
+      }).filter(a => a.line1);
+      if (addrs.length) {
+        const { error: addrErr } = await supabase.from('client_addresses').insert(addrs);
         if (addrErr){ console.error(addrErr); return alert('Failed to save addresses.'); }
       }
     }
-    if (emrsList){
+    // EMRs (if present)
+    if (emrsList) {
       await supabase.from('client_emrs').delete().eq('client_fk', clientId);
-      const emrs=[...emrsList.querySelectorAll('.grid')].map(r=>({
-        client_fk: clientId,
-        vendor:  r.querySelector('[name=vendor]').value.trim(),
-        details: r.querySelector('[name=details]').value.trim()||null
-      })).filter(e=>e.vendor);
-      if(emrs.length){
-        const { error:emrErr } = await supabase.from('client_emrs').insert(emrs);
+      const emrs = [...emrsList.querySelectorAll('.grid')].map(r => {
+        const vendor  = r.querySelector('[name=vendor]') ?.value?.trim() || '';
+        const details = r.querySelector('[name=details]')?.value?.trim() || '';
+        return { client_fk: clientId, vendor, details };
+      }).filter(e => e.vendor);
+      if (emrs.length) {
+        const { error: emrErr } = await supabase.from('client_emrs').insert(emrs);
         if (emrErr){ console.error(emrErr); return alert('Failed to save EMRs.'); }
       }
     }
+
   } else {
     const { data:newClient, error:insErr } = await supabase.from('clients').insert(payload).select('id').single();
     if (insErr){ console.error(insErr); return alert('Failed to create client.'); }
@@ -273,7 +281,6 @@ clientForm?.addEventListener('submit', async (e)=>{
 
   /* Weekly commitment logic (robust) */
   const { inputQty, inputStart } = getWeeklyInputValues();
-  // If user provided ANY weekly field, compute the other from current active (if missing) and write it
   if (inputQty !== null || inputStart !== null){
     const newQty   = (inputQty !== null) ? inputQty : (currentActiveCommit?.weekly_qty ?? 0);
     let   newStart = (inputStart !== null) ? inputStart : (currentActiveCommit?.start_week ?? null);
@@ -286,7 +293,8 @@ clientForm?.addEventListener('submit', async (e)=>{
 
       if (!unchanged){
         if (currentActiveCommit){
-          const { error:deactErr } = await supabase.from('weekly_commitments').update({ active:false }).eq('client_fk', clientId).eq('active', true);
+          const { error:deactErr } = await supabase.from('weekly_commitments')
+            .update({ active:false }).eq('client_fk', clientId).eq('active', true);
           if (deactErr){ console.error(deactErr); return alert('Failed to retire current commitment.'); }
         }
         const { error:insCmtErr } = await supabase.from('weekly_commitments').insert({
@@ -303,14 +311,13 @@ clientForm?.addEventListener('submit', async (e)=>{
 
   closeClientModal();
   await loadClientsList();
-  await loadDashboard();
+  await loadDashboard();   // safe no-op on this page if KPIs not present
   alert('Saved.');
 });
 
 /* ============================================================
    Date-aware selection of active weekly commitment
    ============================================================ */
-// Pick latest active commitment whose start_week <= refDate (Date object)
 function pickActiveQtyForWeek(wkRows, clientId, refDate) {
   const rows = (wkRows || [])
     .filter(r => r.client_fk === clientId && r.active && new Date(r.start_week) <= refDate)
@@ -351,9 +358,8 @@ async function loadDashboard(){
     }, 0);
 
   const rows = (clients || [])
-    .filter(c => !contractedOnly || c.contract_executed)   // uncheck to see everyone
+    .filter(c => !contractedOnly || c.contract_executed)
     .map(c => {
-      // <<< key change: date comparisons, not strings >>>
       const qtyThis  = pickActiveQtyForWeek(wk, c.id, mon);
       const qtyLast  = pickActiveQtyForWeek(wk, c.id, lastMon);
 
@@ -543,7 +549,7 @@ async function loadClientsList(){
   ]);
 
   const latestQty = (id)=>{
-    const rows = wk.filter(r=> r.client_fk===id && r.active)
+    const rows = (wk||[]).filter(r=> r.client_fk===id && r.active)
                    .sort((a,b)=> new Date(b.start_week) - new Date(a.start_week));
     return rows[0]?.weekly_qty || 0;
   };
@@ -552,7 +558,10 @@ async function loadClientsList(){
   (clients||[]).forEach(c=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="text-sm"><a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${c.id}">${c.name}</a></td>
+      <td class="text-sm">
+        <a class="text-indigo-600 hover:underline" href="./client-detail.html?id=${c.id}">${c.name}</a>
+        ${c.contract_executed ? '' : '<span class="ml-2 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">uncontracted</span>'}
+      </td>
       <td class="text-sm">${c.total_lives ?? '—'}</td>
       <td class="text-sm">${latestQty(c.id) ? fmt(latestQty(c.id)) + '/wk' : '—'}</td>
       <td class="text-sm">
@@ -576,7 +585,6 @@ async function loadClientDetail(){
   const id = new URL(location.href).searchParams.get('id');
   const supabase = await getSupabase(); if (!supabase) return;
 
-  // fetch client + related
   const [{ data: client }, { data: addrs }, { data: emrs }, { data: wk }, { data: comps }] = await Promise.all([
     supabase.from('clients').select('*').eq('id', id).single(),
     supabase.from('client_addresses').select('*').eq('client_fk', id).order('created_at'),
@@ -586,25 +594,28 @@ async function loadClientDetail(){
   ]);
 
   nameEl.textContent = client?.name || 'Client';
-  document.getElementById('clientMeta').textContent =
+  const metaEl = document.getElementById('clientMeta');
+  if (metaEl) metaEl.textContent =
     client ? `${client.total_lives ? `Lives: ${client.total_lives.toLocaleString()} — ` : ''}${client.contract_executed ? 'Contracted' : 'Uncontracted'}` : '';
 
   // profile panel
-  const contact = [client?.contact_name, client?.contact_email].filter(Boolean).join(' — ');
-  document.getElementById('contact').innerHTML = client?.contact_email
-    ? `${client?.contact_name || ''} <a class="text-indigo-600 hover:underline" href="mailto:${client.contact_email}">${client.contact_email}</a>`
-    : (contact || '—');
-  document.getElementById('notes').textContent = client?.instructions || '—';
+  const contactEl = document.getElementById('contact');
+  if (contactEl) {
+    contactEl.innerHTML = client?.contact_email
+      ? `${client?.contact_name || ''} <a class="text-indigo-600 hover:underline" href="mailto:${client.contact_email}">${client.contact_email}</a>`
+      : (client?.contact_name || '—');
+  }
+  const notesEl = document.getElementById('notes'); if (notesEl) notesEl.textContent = client?.instructions || '—';
 
   const addrList = document.getElementById('addresses');
-  addrList.innerHTML = (addrs?.length ? addrs : []).map(a =>
+  if (addrList) addrList.innerHTML = (addrs?.length ? addrs : []).map(a =>
     `<li>${[a.line1, a.line2, a.city, a.state, a.zip].filter(Boolean).join(', ')}</li>`).join('') || '<li class="text-gray-500">—</li>';
 
   const emrList = document.getElementById('emrs');
-  emrList.innerHTML = (emrs?.length ? emrs : []).map(e =>
+  if (emrList) emrList.innerHTML = (emrs?.length ? emrs : []).map(e =>
     `<li>${[e.vendor, e.details].filter(Boolean).join(' — ')}</li>`).join('') || '<li class="text-gray-500">—</li>';
 
-  // weekly math (same as dashboard)
+  // weekly math
   const today = new Date();
   const mon = mondayOf(today);
   const fri = fridayEndOf(mon);
@@ -636,43 +647,45 @@ async function loadClientDetail(){
 
   // commitment panel
   const fmtDate = d => d ? new Date(d).toISOString().slice(0,10) : '—';
-  document.getElementById('wkQty').textContent    = weeklyQty ? weeklyQty.toLocaleString() + '/wk' : '—';
-  document.getElementById('startWeek').textContent= activeThis?.start_week ? fmtDate(activeThis.start_week) : '—';
-  document.getElementById('carryIn').textContent  = (carryIn||0).toLocaleString();
-  document.getElementById('required').textContent = required.toLocaleString();
-  document.getElementById('done').textContent     = doneThis.toLocaleString();
-  document.getElementById('remaining').textContent= remaining.toLocaleString();
-  document.getElementById('clientStatus')?.setAttribute('status', status);
+  const setTxt = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  setTxt('wkQty', weeklyQty ? weeklyQty.toLocaleString() + '/wk' : '—');
+  setTxt('startWeek', activeThis?.start_week ? fmtDate(activeThis.start_week) : '—');
+  setTxt('carryIn', (carryIn||0).toLocaleString());
+  setTxt('required', required.toLocaleString());
+  setTxt('done', doneThis.toLocaleString());
+  setTxt('remaining', remaining.toLocaleString());
+  const sBadge = document.getElementById('clientStatus'); sBadge?.setAttribute('status', status);
 
   const logBtn = document.getElementById('clientLogBtn');
   if (logBtn) logBtn.onclick = ()=> openLogModal(id, client?.name || 'Client');
 
   // "This Week" table (one row)
   const weekBody = document.getElementById('clientWeekBody');
-  if (weeklyQty === 0 && carryIn === 0){
-    weekBody.innerHTML = `<tr><td colspan="8" class="py-4 text-sm text-gray-500">No active commitment.</td></tr>`;
-  } else {
-    const friLabel = fri.toISOString().slice(0,10);
-    weekBody.innerHTML = `
-      <tr>
-        <td class="text-sm">${friLabel}</td>
-        <td class="text-sm">${weeklyQty.toLocaleString()}</td>
-        <td class="text-sm">${carryIn.toLocaleString()}</td>
-        <td class="text-sm">${required.toLocaleString()}</td>
-        <td class="text-sm">${doneThis.toLocaleString()}</td>
-        <td class="text-sm">${remaining.toLocaleString()}</td>
-        <td class="text-sm"><status-badge status="${status}"></status-badge></td>
-        <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" onclick="openLogModal('${id}','${(client?.name||'Client').replace(/'/g,'&#39;')}')">Log</button></td>
-      </tr>`;
+  if (weekBody){
+    if (weeklyQty === 0 && carryIn === 0){
+      weekBody.innerHTML = `<tr><td colspan="8" class="py-4 text-sm text-gray-500">No active commitment.</td></tr>`;
+    } else {
+      const friLabel = fri.toISOString().slice(0,10);
+      weekBody.innerHTML = `
+        <tr>
+          <td class="text-sm">${friLabel}</td>
+          <td class="text-sm">${weeklyQty.toLocaleString()}</td>
+          <td class="text-sm">${carryIn.toLocaleString()}</td>
+          <td class="text-sm">${required.toLocaleString()}</td>
+          <td class="text-sm">${doneThis.toLocaleString()}</td>
+          <td class="text-sm">${remaining.toLocaleString()}</td>
+          <td class="text-sm"><status-badge status="${status}"></status-badge></td>
+          <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs"
+            onclick="openLogModal('${id}','${(client?.name||'Client').replace(/'/g,'&#39;')}')">Log</button></td>
+        </tr>`;
+    }
   }
 
   // chart: one stacked bar (completed vs remaining)
   const canv = document.getElementById('clientWeekChart');
   if (canv && window.Chart){
     const ctx = canv.getContext('2d');
-    // tidy width for a single bar
-    document.getElementById('clientChartWidth').style.width = '560px';
-
+    document.getElementById('clientChartWidth')?.style && (document.getElementById('clientChartWidth').style.width = '560px');
     const yCfg = yScaleFor([required], 0.08);
     const colors = statusColors(status);
 
@@ -701,10 +714,16 @@ async function loadClientDetail(){
 
 /* ================= Boot ================= */
 window.addEventListener('DOMContentLoaded', ()=>{
+  // Dashboard live filter
   document.getElementById('filterContracted')?.addEventListener('change', loadDashboard);
 
+  // Page inits (safe no-ops when elements aren’t present)
   loadDashboard();
   loadClientsList();
   loadClientDetail();
-  console.log('Weekly build + date-aware commitments loaded');
+
+  console.log('Deliverables Tracker — scripts loaded');
 });
+
+// Expose openLogModal for inline button on client-detail row
+window.openLogModal = openLogModal;
