@@ -60,11 +60,14 @@ btnAddEmr?.addEventListener('click', ()=>addEmrRow());
 async function openClientModalById(id){
   const supabase = await getSupabase(); if(!supabase) return alert('Supabase not configured.');
   const { data: client } = await supabase.from('clients').select('*').eq('id', id).single();
-  const [{ data:addrs }, { data:emrs }, { data:commits }] = await Promise.all([
-    supabase.from('client_addresses').select('line1,line2,city,state,zip').eq('client_fk', id).order('created_at'),
-    supabase.from('client_emrs').select('vendor,details').eq('client_fk', id).order('created_at'),
-    supabase.from('weekly_commitments').select('weekly_qty,start_week,active').eq('client_fk', id).order('start_week', {ascending:false}).limit(1)
-  ]);
+const [{ data:addrs }, { data:emrs }, { data:commits }] = await Promise.all([
+  supabase.from('client_addresses')
+    .select('line1,line2,city,state,zip').eq('client_fk', id).order('id', { ascending: true }),
+  supabase.from('client_emrs')
+    .select('vendor,details').eq('client_fk', id).order('id', { ascending: true }),
+  supabase.from('weekly_commitments')
+    .select('weekly_qty,start_week,active').eq('client_fk', id).order('start_week', { ascending:false }).limit(1)
+]);
   openClientModalPrefilled(client, addrs||[], emrs||[], commits?.[0]||null);
 }
 
@@ -326,13 +329,13 @@ async function loadClientsList(){
 async function loadClientDetail(){
   const nameEl=document.getElementById('clientName'); if(!nameEl) return;
   const id=new URL(location.href).searchParams.get('id'); const supabase=await getSupabase(); if(!supabase) return;
-  const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Promise.all([
-    supabase.from('clients').select('*').eq('id', id).single(),
-    supabase.from('client_addresses').select('*').eq('client_fk', id).order('created_at'),
-    supabase.from('client_emrs').select('*').eq('client_fk', id).order('created_at'),
-    supabase.from('weekly_commitments').select('*').eq('client_fk', id).order('start_week',{ascending:false}),
-    supabase.from('completions').select('*').eq('client_fk', id)
-  ]);
+const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Promise.all([
+  supabase.from('clients').select('*').eq('id', id).single(),
+  supabase.from('client_addresses').select('*').eq('client_fk', id).order('id', { ascending: true }),
+  supabase.from('client_emrs').select('*').eq('client_fk', id).order('id', { ascending: true }),
+  supabase.from('weekly_commitments').select('*').eq('client_fk', id).order('start_week', { ascending:false }),
+  supabase.from('completions').select('*').eq('client_fk', id)
+]);
 
   nameEl.textContent=client?.name||'Client';
   const meta=document.getElementById('clientMeta');
