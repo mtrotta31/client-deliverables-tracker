@@ -213,105 +213,136 @@ async function openClientModalById(id){
   openClientModalPrefilled(client, addrs||[], emrs||[], activeCommit);
 }
 
-/* Save (create/update) */
+/* Save (create/update) — REPLACE the whole existing submit handler with this one */
 clientForm?.addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const supabase = await getSupabase(); if (!supabase) return alert('Supabase not configured.');
+  const supabase = await getSupabase();
+  if (!supabase) return alert('Supabase not configured.');
 
+  // 1) Core client fields
   const payload = {
     name: clientForm.name.value.trim(),
-    total_lives: Number(clientForm.total_lives.value||0),
+    total_lives: Number(clientForm.total_lives.value || 0),
     contact_name: clientForm.contact_name.value.trim() || null,
     contact_email: clientForm.contact_email.value.trim() || null,
     instructions: clientForm.instructions.value.trim() || null,
     contract_executed: !!document.getElementById('contract_executed')?.checked
   };
 
-  let clientId = clientForm.client_id.value || null;
+  // 2) Weekly inputs (can be blank)
+  const { inputQty, inputStart } = (function getWeeklyInputValuesLocal() {
+    const qtyEl   = clientForm.querySelector('[name="weekly_qty"], #weekly_qty');
+    const startEl = clientForm.querySelector('[name="start_week"], #start_week');
+    const rawQty   = qtyEl?.value?.trim();
+    const rawStart = startEl?.value?.trim();
+    return {
+      inputQty:   rawQty==='' || rawQty==null ? null : Number(rawQty),
+      inputStart: rawStart ? rawStart : null
+    };
+  })();
+
+  // 3) Collect addresses & EMRs from the modal rows
+  const addrs = addressesList ? [...addressesList.querySelectorAll('.grid')].map(r => {
+    const line1 = r.querySelector('[name=line1]')?.value?.trim() || '';
+    const line2 = r.querySelector('[name=line2]')?.value?.trim() || '';
+    const city  = r.querySelector('[name=city]') ?.value?.trim() || '';
+    const state = r.querySelector('[name=state]')?.value?.trim() || '';
+    const zip   = r.querySelector('[name=zip]')  ?.value?.trim() || '';
+    return { line1, line2, city, state, zip };
+  }).filter(a => a.line1 || a.line2 || a.city || a.state || a.zip) : [];
+
+  const emrs = emrsList ? [...emrsList.querySelectorAll('.grid')].map(r => {
+    const vendor  = r.querySelector('[name=vendor]') ?.value?.trim() || '';
+    const details = r.querySelector('[name=details]')?.value?.trim() || '';
+    return { vendor, details };
+  }).filter(e => e.vendor || e.details) : [];
+
+  // 4) Create or update client
+  let clientId = clientForm.client_id.value?.trim() || null;
   let currentActiveCommit = null;
 
-  if (clientId){
+  if (clientId) {
+    // UPDATE
+    const { error: upErr } = await supabase.from('clients').update(payload).eq('id', clientId);
+    if (upErr) { console.error(upErr); return alert('Failed to update client.'); }
+
     const { data: existing } = await supabase
       .from('weekly_commitments')
       .select('weekly_qty,start_week,active')
-      .eq('client_fk', clientId)
-      .eq('active', true)
-      .order('start_week', { ascending:false })
-      .limit(1);
+      .eq('client_fk', clientId).eq('active', true)
+      .order('start_week', { ascending:false }).limit(1);
     currentActiveCommit = existing?.[0] || null;
 
-    const { error:upErr } = await supabase.from('clients').update(payload).eq('id', clientId);
-    if (upErr){ console.error(upErr); return alert('Failed to update client.'); }
-
-    // Addresses (if present)
-    if (addressesList) {
-      await supabase.from('client_addresses').delete().eq('client_fk', clientId);
-      const addrs = [...addressesList.querySelectorAll('.grid')].map(r => {
-        const line1 = r.querySelector('[name=line1]')?.value?.trim() || '';
-        const line2 = r.querySelector('[name=line2]')?.value?.trim() || '';
-        const city  = r.querySelector('[name=city]') ?.value?.trim() || '';
-        const state = r.querySelector('[name=state]')?.value?.trim() || '';
-        const zip   = r.querySelector('[name=zip]')  ?.value?.trim() || '';
-        return { client_fk: clientId, line1, line2, city, state, zip };
-      }).filter(a => a.line1);
-      if (addrs.length) {
-        const { error: addrErr } = await supabase.from('client_addresses').insert(addrs);
-        if (addrErr){ console.error(addrErr); return alert('Failed to save addresses.'); }
-      }
-    }
-    // EMRs (if present)
-    if (emrsList) {
-      await supabase.from('client_emrs').delete().eq('client_fk', clientId);
-      const emrs = [...emrsList.querySelectorAll('.grid')].map(r => {
-        const vendor  = r.querySelector('[name=vendor]') ?.value?.trim() || '';
-        const details = r.querySelector('[name=details]')?.value?.trim() || '';
-        return { client_fk: clientId, vendor, details };
-      }).filter(e => e.vendor);
-      if (emrs.length) {
-        const { error: emrErr } = await supabase.from('client_emrs').insert(emrs);
-        if (emrErr){ console.error(emrErr); return alert('Failed to save EMRs.'); }
-      }
-    }
-
   } else {
-    const { data:newClient, error:insErr } = await supabase.from('clients').insert(payload).select('id').single();
-    if (insErr){ console.error(insErr); return alert('Failed to create client.'); }
+    // INSERT
+    const { data: newClient, error: insErr } =
+      await supabase.from('clients').insert(payload).select('id').single();
+    if (insErr) { console.error(insErr); return alert('Failed to create client.'); }
     clientId = newClient.id;
   }
 
-  /* Weekly commitment logic (robust) */
-  const { inputQty, inputStart } = getWeeklyInputValues();
-  if (inputQty !== null || inputStart !== null){
-    const newQty   = (inputQty !== null) ? inputQty : (currentActiveCommit?.weekly_qty ?? 0);
+  // 5) Upsert addresses
+  if (addressesList) {
+    // clear previous (safe even for new client)
+    const { error: delAddrErr } = await supabase.from('client_addresses').delete().eq('client_fk', clientId);
+    if (delAddrErr) { console.error(delAddrErr); return alert('Failed to clear existing addresses.'); }
+
+    if (addrs.length) {
+      const rows = addrs.map(a => ({ client_fk: clientId, ...a }));
+      const { error: addrErr } = await supabase.from('client_addresses').insert(rows);
+      if (addrErr) { console.error(addrErr); return alert('Failed to save addresses.'); }
+    }
+  }
+
+  // 6) Upsert EMRs
+  if (emrsList) {
+    const { error: delEmrErr } = await supabase.from('client_emrs').delete().eq('client_fk', clientId);
+    if (delEmrErr) { console.error(delEmrErr); return alert('Failed to clear existing EMRs.'); }
+
+    if (emrs.length) {
+      const rows = emrs.map(e => ({ client_fk: clientId, ...e }));
+      const { error: emrErr } = await supabase.from('client_emrs').insert(rows);
+      if (emrErr) { console.error(emrErr); return alert('Failed to save EMRs.'); }
+    }
+  }
+
+  // 7) Weekly commitment (works for NEW and EDIT)
+  const mondayOf = (d) => {
+    const x = new Date(d); const day = x.getDay(); const back = (day + 6) % 7;
+    x.setHours(0,0,0,0); x.setDate(x.getDate() - back); return x;
+  };
+
+  if (inputQty !== null || inputStart !== null) {
+    const newQty   = (inputQty !== null)  ? inputQty : (currentActiveCommit?.weekly_qty ?? 0);
     let   newStart = (inputStart !== null) ? inputStart : (currentActiveCommit?.start_week ?? null);
     if (!newStart) newStart = mondayOf(new Date()).toISOString().slice(0,10);
 
-    if (newQty > 0){
+    if (newQty > 0) {
       const unchanged = currentActiveCommit &&
         Number(currentActiveCommit.weekly_qty) === Number(newQty) &&
         String(currentActiveCommit.start_week).slice(0,10) === String(newStart).slice(0,10);
 
-      if (!unchanged){
-        if (currentActiveCommit){
-          const { error:deactErr } = await supabase.from('weekly_commitments')
-            .update({ active:false }).eq('client_fk', clientId).eq('active', true);
-          if (deactErr){ console.error(deactErr); return alert('Failed to retire current commitment.'); }
+      if (!unchanged) {
+        // retire current (only if there is one)
+        if (currentActiveCommit) {
+          const { error: deactErr } = await supabase
+            .from('weekly_commitments').update({ active:false })
+            .eq('client_fk', clientId).eq('active', true);
+          if (deactErr) { console.error(deactErr); return alert('Failed to retire current commitment.'); }
         }
-        const { error:insCmtErr } = await supabase.from('weekly_commitments').insert({
-          client_fk: clientId,
-          weekly_qty: newQty,
-          start_week: newStart,
-          active: true
+        // insert new
+        const { error: insCmtErr } = await supabase.from('weekly_commitments').insert({
+          client_fk: clientId, weekly_qty: newQty, start_week: newStart, active: true
         });
-        if (insCmtErr){ console.error(insCmtErr); return alert('Failed to save weekly commitment.'); }
+        if (insCmtErr) { console.error(insCmtErr); return alert('Failed to save weekly commitment.'); }
       }
     }
   }
-  /* End weekly commitment logic */
 
-  closeClientModal();
+  // 8) Finish
+  modal?.classList.add('hidden');
   await loadClientsList();
-  await loadDashboard();   // safe no-op on this page if KPIs not present
+  await loadDashboard();    // safe no-op on clients page if KPIs aren’t on screen
   alert('Saved.');
 });
 
