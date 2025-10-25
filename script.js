@@ -1,32 +1,33 @@
-// script.js — weekly model + clients CRUD + addresses/EMRs + dashboard + client detail
+// script.js — weekly model + clients CRUD + delete + addresses/EMRs + dashboard + client detail
 import { getSupabase } from './supabaseClient.js';
 
-const DEBUG = true; // flip to false to silence console logs
+const DEBUG = false; // flip to true for console logs
+const log = (...a) => { if (DEBUG) console.log('[DT]', ...a); };
 
-/* ===== Utilities ===== */
+/* ===== Date & math utils ===== */
 const fmt = (n)=> Number(n||0).toLocaleString();
-function log(...a){ if (DEBUG) console.log('[DT]', ...a); }
-
 function mondayOf(date){ const d=new Date(date); const day=d.getDay(); const back=(day+6)%7; d.setHours(0,0,0,0); d.setDate(d.getDate()-back); return d; }
-function fridayEndOf(monday){ const f=new Date(monday); f.setDate(f.getDate()+5); f.setHours(0,0,0,0); f.setMilliseconds(-1); return f; }
+function fridayEndOf(monday){ const f=new Date(monday); f.setDate(f.getDate()+5); f.setHours(23,59,59,999); return f; }
 function daysLeftThisWeek(today){ const dow=today.getDay(); if(dow===6||dow===0) return 5; return Math.max(1,6-dow); }
 function yScaleFor(values, pad=0.06){ const nums=(values||[]).map(v=>+v||0); const mx=Math.max(...nums,0); if(mx<=0)return{min:0,max:1,stepSize:1}; const top=Math.ceil(mx*(1+pad)); const rough=top/5, pow=10**Math.floor(Math.log10(rough)); const step=Math.max(5,Math.ceil(rough/pow)*pow); return {min:0,max:Math.ceil(top/step)*step,stepSize:step}; }
 function statusColors(s,a=0.72){ const map={green:{r:34,g:197,b:94,stroke:'#16a34a'},yellow:{r:234,g:179,b:8,stroke:'#d97706'},red:{r:239,g:68,b:68,stroke:'#b91c1c'}}; const k=map[s]||map.green; return {fill:`rgba(${k.r},${k.g},${k.b},${a})`,hover:`rgba(${k.r},${k.g},${k.b},${Math.min(1,a+0.15)})`,stroke:k.stroke}; }
 
-/* ===== Optional DOM refs (page-aware) ===== */
+/* ===== Optional page elements (feature-gated) ===== */
 // Dashboard
 const kpiTotal = document.querySelector('#kpi-total');
 const kpiCompleted = document.querySelector('#kpi-completed');
 const kpiRemaining = document.querySelector('#kpi-remaining');
 const dueBody = document.querySelector('#dueThisWeekBody');
 let byClientChart;
-// Log modal (on index & client-detail)
+
+// Global log modal (index & client-detail)
 const logModal = document.getElementById('logModal');
 const logForm  = document.getElementById('logForm');
 const logClose = document.getElementById('logClose');
 const logCancel= document.getElementById('logCancel');
 const logClientName = document.getElementById('logClientName');
-// Clients page modal bits
+
+// Clients page modal
 const modal = document.getElementById('clientModal');
 const modalTitle = document.getElementById('clientModalTitle');
 const btnOpen = document.getElementById('btnAddClient');
@@ -46,8 +47,7 @@ function weeklyEls(){ const qtyEl=clientForm?.querySelector('[name="weekly_qty"]
 function setWeeklyInputValues({weekly_qty,start_week}){ const {qtyEl,startEl}=weeklyEls(); if(qtyEl) qtyEl.value=weekly_qty??''; if(startEl) startEl.value=start_week?String(start_week).slice(0,10):''; }
 function openClientModalBlank(){ if(!modal)return; modal.classList.remove('hidden'); modalTitle.textContent='Add Client'; clientForm.reset(); clientForm.client_id.value=''; addressesList.innerHTML=''; emrsList.innerHTML=''; addAddressRow(); addEmrRow(); setWeeklyInputValues({weekly_qty:'',start_week:''}); }
 function openClientModalPrefilled(client, addrs=[], emrs=[], activeCommit=null){ if(!modal)return; modal.classList.remove('hidden'); modalTitle.textContent='Edit Client'; clientForm.reset(); clientForm.client_id.value=client?.id||''; clientForm.name.value=client?.name||''; clientForm.total_lives.value=client?.total_lives||''; clientForm.contact_name.value=client?.contact_name||''; clientForm.contact_email.value=client?.contact_email||''; clientForm.instructions.value=client?.instructions||''; document.getElementById('contract_executed').checked=!!client?.contract_executed; addressesList.innerHTML=''; (addrs.length?addrs:[{}]).forEach(a=>addAddressRow(a)); emrsList.innerHTML=''; (emrs.length?emrs:[{}]).forEach(e=>addEmrRow(e)); setWeeklyInputValues(activeCommit?{weekly_qty:activeCommit.weekly_qty,start_week:activeCommit.start_week}:{weekly_qty:'',start_week:''}); }
-function closeClientModal(){ modal?.classList.add('hidden'); }
-
+const closeClientModal = ()=> modal?.classList.add('hidden');
 function addAddressRow(a={}){ if(!addrTpl||!addressesList)return; const node=addrTpl.content.cloneNode(true); const row=node.querySelector('.grid'); row.querySelector('[name=line1]').value=a.line1||''; row.querySelector('[name=line2]').value=a.line2||''; row.querySelector('[name=city]').value=a.city||''; row.querySelector('[name=state]').value=a.state||''; row.querySelector('[name=zip]').value=a.zip||''; row.querySelector('.remove').onclick=()=>row.remove(); addressesList.appendChild(node); }
 function addEmrRow(e={}){ if(!emrTpl||!emrsList)return; const node=emrTpl.content.cloneNode(true); const row=node.querySelector('.grid'); row.querySelector('[name=vendor]').value=e.vendor||''; row.querySelector('[name=details]').value=e.details||''; row.querySelector('.remove').onclick=()=>row.remove(); emrsList.appendChild(node); }
 
@@ -60,18 +60,15 @@ btnAddEmr?.addEventListener('click', ()=>addEmrRow());
 async function openClientModalById(id){
   const supabase = await getSupabase(); if(!supabase) return alert('Supabase not configured.');
   const { data: client } = await supabase.from('clients').select('*').eq('id', id).single();
-const [{ data:addrs }, { data:emrs }, { data:commits }] = await Promise.all([
-  supabase.from('client_addresses')
-    .select('line1,line2,city,state,zip').eq('client_fk', id).order('id', { ascending: true }),
-  supabase.from('client_emrs')
-    .select('vendor,details').eq('client_fk', id).order('id', { ascending: true }),
-  supabase.from('weekly_commitments')
-    .select('weekly_qty,start_week,active').eq('client_fk', id).order('start_week', { ascending:false }).limit(1)
-]);
+  const [{ data:addrs }, { data:emrs }, { data:commits }] = await Promise.all([
+    supabase.from('client_addresses').select('line1,line2,city,state,zip').eq('client_fk', id).order('id', { ascending: true }),
+    supabase.from('client_emrs').select('vendor,details').eq('client_fk', id).order('id', { ascending: true }),
+    supabase.from('weekly_commitments').select('weekly_qty,start_week,active').eq('client_fk', id).order('start_week', { ascending:false }).limit(1)
+  ]);
   openClientModalPrefilled(client, addrs||[], emrs||[], commits?.[0]||null);
 }
 
-/* ===== Save client (CREATE & UPDATE) — addresses + EMRs always written ===== */
+/* ===== Create / Update client (addresses + EMRs always written) ===== */
 clientForm?.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const supabase = await getSupabase(); if(!supabase) return alert('Supabase not configured.');
@@ -85,7 +82,7 @@ clientForm?.addEventListener('submit', async (e)=>{
     contract_executed: !!document.getElementById('contract_executed')?.checked
   };
 
-  // gather rows from UI
+  // rows from UI
   const addrs = addressesList ? [...addressesList.querySelectorAll('.grid')].map(r=>{
     const line1=r.querySelector('[name=line1]')?.value?.trim()||'';
     const line2=r.querySelector('[name=line2]')?.value?.trim()||'';
@@ -100,10 +97,6 @@ clientForm?.addEventListener('submit', async (e)=>{
     const details= r.querySelector('[name=details]')?.value?.trim()||'';
     return { vendor, details };
   }).filter(e=> e.vendor || e.details ) : [];
-
-  log('Saving client payload', payload);
-  log('Addresses', addrs);
-  log('EMRs', emrs);
 
   let clientId = clientForm.client_id.value?.trim() || null;
 
@@ -138,10 +131,10 @@ clientForm?.addEventListener('submit', async (e)=>{
     }
   }
 
-  // weekly commitment
+  // weekly commitment (retire previous active if changed)
   const qtyEl = clientForm.querySelector('[name="weekly_qty"], #weekly_qty');
   const startEl = clientForm.querySelector('[name="start_week"], #start_week');
-  const inputQty   = qtyEl?.value?.trim();   // string
+  const inputQty   = qtyEl?.value?.trim();
   const inputStart = startEl?.value?.trim();
 
   if (inputQty || inputStart){
@@ -173,9 +166,30 @@ clientForm?.addEventListener('submit', async (e)=>{
 
   closeClientModal();
   await loadClientsList();
-  await loadDashboard(); // safe on this page
+  await loadDashboard(); // safe if not on dashboard
   alert('Saved.');
 });
+
+/* ===== Delete client (with child cleanup) ===== */
+async function handleDelete(clientId, clientName='this client'){
+  if (!confirm(`Delete “${clientName}”? This removes the client and all related data (addresses, EMRs, commitments, completions).`)) return;
+
+  const supabase = await getSupabase();
+  if (!supabase) return alert('Supabase not configured.');
+
+  // Delete children first (safe even if DB has ON DELETE CASCADE)
+  const tables = ['completions', 'client_addresses', 'client_emrs', 'weekly_commitments'];
+  for (const t of tables){
+    const { error } = await supabase.from(t).delete().eq('client_fk', clientId);
+    if (error){ console.error(error); alert(`Failed to delete from ${t}: ${error.message}`); return; }
+  }
+  const { error:delClientErr } = await supabase.from('clients').delete().eq('id', clientId);
+  if (delClientErr){ console.error(delClientErr); alert(`Failed to delete client: ${delClientErr.message}`); return; }
+
+  await loadClientsList();
+  await loadDashboard();
+  alert('Client deleted.');
+}
 
 /* ===== Dashboard ===== */
 function pickActiveQtyForWeek(wkRows, clientId, refDate){
@@ -292,7 +306,7 @@ logForm?.addEventListener('submit', async (e)=>{
   const payload={ client_fk: logForm.client_id.value, occurred_on:new Date().toISOString(), qty_completed: qty, note: logForm.note.value?.trim()||null };
   const { error } = await supabase.from('completions').insert(payload);
   if(error){ console.error(error); return alert('Failed to log completion.'); }
-  closeLogModal(); await loadDashboard();
+  closeLogModal(); await loadDashboard(); await loadClientDetail();
 });
 
 /* ===== Clients list ===== */
@@ -318,28 +332,41 @@ async function loadClientsList(){
       </td>
       <td class="text-sm">${c.total_lives ?? '—'}</td>
       <td class="text-sm">${latestQty(c.id) ? fmt(latestQty(c.id))+'/wk' : '—'}</td>
-      <td class="text-sm"><button class="px-2 py-1 rounded border text-sm" data-edit="${c.id}">Edit</button></td>`;
+      <td class="text-sm">
+        <button class="px-2 py-1 rounded border text-sm mr-2" data-edit="${c.id}">Edit</button>
+        <button class="px-2 py-1 rounded border text-sm text-red-600 hover:bg-red-50" data-delete="${c.id}" data-name="${c.name}">Delete</button>
+      </td>`;
     clientsTableBody.appendChild(tr);
   });
 
-  clientsTableBody.onclick = async (e)=>{ const b=e.target.closest('button[data-edit]'); if(!b) return; await openClientModalById(b.getAttribute('data-edit')); };
+  clientsTableBody.onclick = async (e)=>{
+    const del = e.target.closest('button[data-delete]');
+    if (del) { await handleDelete(del.dataset.delete, del.dataset.name); return; }
+    const edit = e.target.closest('button[data-edit]');
+    if (edit) { await openClientModalById(edit.dataset.edit); return; }
+  };
 }
 
 /* ===== Client detail page ===== */
 async function loadClientDetail(){
   const nameEl=document.getElementById('clientName'); if(!nameEl) return;
   const id=new URL(location.href).searchParams.get('id'); const supabase=await getSupabase(); if(!supabase) return;
-const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Promise.all([
-  supabase.from('clients').select('*').eq('id', id).single(),
-  supabase.from('client_addresses').select('*').eq('client_fk', id).order('id', { ascending: true }),
-  supabase.from('client_emrs').select('*').eq('client_fk', id).order('id', { ascending: true }),
-  supabase.from('weekly_commitments').select('*').eq('client_fk', id).order('start_week', { ascending:false }),
-  supabase.from('completions').select('*').eq('client_fk', id)
-]);
+
+  const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Promise.all([
+    supabase.from('clients').select('*').eq('id', id).single(),
+    supabase.from('client_addresses').select('*').eq('client_fk', id).order('id', { ascending: true }),
+    supabase.from('client_emrs').select('*').eq('client_fk', id).order('id', { ascending: true }),
+    supabase.from('weekly_commitments').select('*').eq('client_fk', id).order('start_week', { ascending:false }),
+    supabase.from('completions').select('*').eq('client_fk', id)
+  ]);
 
   nameEl.textContent=client?.name||'Client';
   const meta=document.getElementById('clientMeta');
   if(meta) meta.textContent = client ? `${client.total_lives?`Lives: ${client.total_lives.toLocaleString()} — `:''}${client.contract_executed?'Contracted':'Uncontracted'}` : '';
+
+  // Wire up Delete on profile
+  const delBtn=document.getElementById('clientDeleteBtn');
+  if (delBtn) delBtn.onclick = async ()=>{ await handleDelete(id, client?.name||'this client'); location.href='./clients.html'; };
 
   const contact=document.getElementById('contact');
   if(contact) contact.innerHTML = client?.contact_email ? `${client?.contact_name||''} <a class="text-indigo-600 hover:underline" href="mailto:${client.contact_email}">${client.contact_email}</a>` : (client?.contact_name||'—');
@@ -350,7 +377,7 @@ const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Pr
   const emrList=document.getElementById('emrs');
   if(emrList) emrList.innerHTML = (emrs?.length? emrs:[]).map(e=>`<li>${[e.vendor,e.details].filter(Boolean).join(' — ')}</li>`).join('') || '<li class="text-gray-500">—</li>';
 
-  // weekly viz (same math as dashboard)
+  // Weekly math
   const today=new Date(); const mon=mondayOf(today); const fri=fridayEndOf(mon);
   const lastMon=new Date(mon); lastMon.setDate(lastMon.getDate()-7); const lastFri=fridayEndOf(lastMon);
   const pickActive=(ref)=> (wk||[]).filter(r=>r.active && new Date(r.start_week)<=ref).sort((a,b)=>new Date(b.start_week)-new Date(a.start_week))[0]||null;
@@ -370,7 +397,9 @@ const [{data:client},{data:addrs},{data:emrs},{data:wk},{data:comps}] = await Pr
   setTxt('done', doneThis.toLocaleString());
   setTxt('remaining', remaining.toLocaleString());
   document.getElementById('clientStatus')?.setAttribute('status', status);
-  const logBtn=document.getElementById('clientLogBtn'); if(logBtn) logBtn.onclick=()=>openLogModal(id, client?.name||'Client');
+
+  const logBtn=document.getElementById('clientLogBtn');
+  if(logBtn) logBtn.onclick=()=>openLogModal(id, client?.name||'Client');
 
   const body=document.getElementById('clientWeekBody');
   if(body){
