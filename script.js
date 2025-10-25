@@ -568,15 +568,135 @@ async function loadClientsList(){
   };
 }
 
-/* ================= Client detail (placeholder) ================= */
+/* ================= Client detail (weekly model) ================= */
 async function loadClientDetail(){
   const nameEl = document.getElementById('clientName');
   if (!nameEl) return; // not on detail page
+
   const id = new URL(location.href).searchParams.get('id');
   const supabase = await getSupabase(); if (!supabase) return;
 
-  const { data: client } = await supabase.from('clients').select('*').eq('id', id).single();
+  // fetch client + related
+  const [{ data: client }, { data: addrs }, { data: emrs }, { data: wk }, { data: comps }] = await Promise.all([
+    supabase.from('clients').select('*').eq('id', id).single(),
+    supabase.from('client_addresses').select('*').eq('client_fk', id).order('created_at'),
+    supabase.from('client_emrs').select('*').eq('client_fk', id).order('created_at'),
+    supabase.from('weekly_commitments').select('*').eq('client_fk', id).order('start_week', { ascending:false }),
+    supabase.from('completions').select('*').eq('client_fk', id)
+  ]);
+
   nameEl.textContent = client?.name || 'Client';
+  document.getElementById('clientMeta').textContent =
+    client ? `${client.total_lives ? `Lives: ${client.total_lives.toLocaleString()} — ` : ''}${client.contract_executed ? 'Contracted' : 'Uncontracted'}` : '';
+
+  // profile panel
+  const contact = [client?.contact_name, client?.contact_email].filter(Boolean).join(' — ');
+  document.getElementById('contact').innerHTML = client?.contact_email
+    ? `${client?.contact_name || ''} <a class="text-indigo-600 hover:underline" href="mailto:${client.contact_email}">${client.contact_email}</a>`
+    : (contact || '—');
+  document.getElementById('notes').textContent = client?.instructions || '—';
+
+  const addrList = document.getElementById('addresses');
+  addrList.innerHTML = (addrs?.length ? addrs : []).map(a =>
+    `<li>${[a.line1, a.line2, a.city, a.state, a.zip].filter(Boolean).join(', ')}</li>`).join('') || '<li class="text-gray-500">—</li>';
+
+  const emrList = document.getElementById('emrs');
+  emrList.innerHTML = (emrs?.length ? emrs : []).map(e =>
+    `<li>${[e.vendor, e.details].filter(Boolean).join(' — ')}</li>`).join('') || '<li class="text-gray-500">—</li>';
+
+  // weekly math (same as dashboard)
+  const today = new Date();
+  const mon = mondayOf(today);
+  const fri = fridayEndOf(mon);
+  const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
+  const lastFri = fridayEndOf(lastMon);
+
+  const pickActive = (refDate)=>{
+    const rows = (wk||[]).filter(r => r.active && new Date(r.start_week) <= refDate)
+                         .sort((a,b)=> new Date(b.start_week) - new Date(a.start_week));
+    return rows[0] || null;
+  };
+
+  const activeThis = pickActive(mon);
+  const activeLast = pickActive(lastMon);
+
+  const weeklyQty = activeThis?.weekly_qty || 0;
+  const doneForRange = (from, to)=> (comps||[]).reduce((s,c)=>{
+    const d = new Date(c.occurred_on);
+    return (d>=from && d<=to) ? s + (c.qty_completed||0) : s;
+  }, 0);
+
+  const doneLast = doneForRange(lastMon, lastFri);
+  const carryIn  = (activeLast?.weekly_qty || 0) - doneLast;        // may be negative
+  const required = Math.max(0, weeklyQty + carryIn);
+  const doneThis = doneForRange(mon, fri);
+  const remaining= Math.max(0, required - doneThis);
+  const needPerDay = remaining / Math.max(1, daysLeftThisWeek(today));
+  const status = carryIn>0 ? 'red' : (needPerDay>100 ? 'yellow' : 'green');
+
+  // commitment panel
+  const fmtDate = d => d ? new Date(d).toISOString().slice(0,10) : '—';
+  document.getElementById('wkQty').textContent    = weeklyQty ? weeklyQty.toLocaleString() + '/wk' : '—';
+  document.getElementById('startWeek').textContent= activeThis?.start_week ? fmtDate(activeThis.start_week) : '—';
+  document.getElementById('carryIn').textContent  = (carryIn||0).toLocaleString();
+  document.getElementById('required').textContent = required.toLocaleString();
+  document.getElementById('done').textContent     = doneThis.toLocaleString();
+  document.getElementById('remaining').textContent= remaining.toLocaleString();
+  document.getElementById('clientStatus')?.setAttribute('status', status);
+
+  const logBtn = document.getElementById('clientLogBtn');
+  if (logBtn) logBtn.onclick = ()=> openLogModal(id, client?.name || 'Client');
+
+  // "This Week" table (one row)
+  const weekBody = document.getElementById('clientWeekBody');
+  if (weeklyQty === 0 && carryIn === 0){
+    weekBody.innerHTML = `<tr><td colspan="8" class="py-4 text-sm text-gray-500">No active commitment.</td></tr>`;
+  } else {
+    const friLabel = fri.toISOString().slice(0,10);
+    weekBody.innerHTML = `
+      <tr>
+        <td class="text-sm">${friLabel}</td>
+        <td class="text-sm">${weeklyQty.toLocaleString()}</td>
+        <td class="text-sm">${carryIn.toLocaleString()}</td>
+        <td class="text-sm">${required.toLocaleString()}</td>
+        <td class="text-sm">${doneThis.toLocaleString()}</td>
+        <td class="text-sm">${remaining.toLocaleString()}</td>
+        <td class="text-sm"><status-badge status="${status}"></status-badge></td>
+        <td class="text-sm"><button class="px-2 py-1 rounded bg-gray-900 text-white text-xs" onclick="openLogModal('${id}','${(client?.name||'Client').replace(/'/g,'&#39;')}')">Log</button></td>
+      </tr>`;
+  }
+
+  // chart: one stacked bar (completed vs remaining)
+  const canv = document.getElementById('clientWeekChart');
+  if (canv && window.Chart){
+    const ctx = canv.getContext('2d');
+    // tidy width for a single bar
+    document.getElementById('clientChartWidth').style.width = '560px';
+
+    const yCfg = yScaleFor([required], 0.08);
+    const colors = statusColors(status);
+
+    if (window.__clientChart) window.__clientChart.destroy();
+    window.__clientChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['This week'],
+        datasets: [
+          { label:'Completed', data:[doneThis], backgroundColor:'rgba(107,114,128,0.50)', borderColor:'#6b7280',
+            borderWidth:1, borderRadius:10, borderSkipped:false, maxBarThickness:56, stack:'totals' },
+          { label:'Remaining', data:[remaining], backgroundColor:colors.fill, borderColor:colors.stroke,
+            borderWidth:1.5, borderRadius:10, borderSkipped:false, maxBarThickness:56, stack:'totals' }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false, animation:{duration:400},
+        plugins:{ legend:{display:true}, tooltip:{displayColors:false, padding:12} },
+        scales:{ x:{ stacked:true, grid:{display:false} },
+                 y:{ stacked:true, min:yCfg.min, max:yCfg.max, ticks:{stepSize:yCfg.stepSize},
+                     grid:{ color:'rgba(17,24,39,0.08)' } } }
+      }
+    });
+  }
 }
 
 /* ================= Boot ================= */
