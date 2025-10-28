@@ -238,99 +238,39 @@ async function loadDashboard(){
 }
 
 function renderByClientChart(rows){
-  const labels   = rows.map(r => r.name);
-  const remains  = rows.map(r => r.remaining ?? 0);
-  const completes= rows.map(r => Math.max(0, (r.required ?? 0) - (r.remaining ?? 0)));
-  const required = rows.map((r,i) => r.required ?? (remains[i] + completes[i]));
-  const statuses = rows.map(r => r.status);
+  const labels=rows.map(r=>r.name);
+  const completes=rows.map(r=>Math.max(0,r.required-r.remaining));
+  const remains=rows.map(r=>r.remaining);
+  const statuses=rows.map(r=>r.status);
 
-  // Make the canvas wide enough so labels don’t collide
-  const widthPx = Math.max(1100, labels.length * 140);
-  const widthDiv = document.getElementById('chartWidth');
-  const canvas   = document.getElementById('byClientChart');
-  if (widthDiv) widthDiv.style.width = widthPx + 'px';
-  if (canvas)   canvas.width = widthPx;
+  const widthPx=Math.max(1100, labels.length*140);
+  const widthDiv=document.getElementById('chartWidth'); const canvas=document.getElementById('byClientChart');
+  if(widthDiv) widthDiv.style.width=widthPx+'px'; if(canvas) canvas.width=widthPx;
 
-  if (!canvas || !window.Chart) return;
+  const totals=labels.map((_,i)=>completes[i]+remains[i]); const yCfg=yScaleFor(totals,0.05);
+  if(byClientChart) byClientChart.destroy();
+  if(!canvas || !window.Chart) return;
 
-  // Build per-bar “raw” objects so tooltips can show completed/target
-  const points = labels.map((name, i) => {
-    const c = statusColors(statuses[i]);
-    return {
-      x: name,
-      y: remains[i],
-      completed: completes[i],
-      target: required[i],
-      color:  c.fill,
-      hover:  c.hover,
-      stroke: c.stroke
-    };
-  });
-
-  const yCfg = yScaleFor([...remains, ...required], 0.08);
-
-  if (window.__byClientChart) window.__byClientChart.destroy();
-
-  window.__byClientChart = new Chart(canvas.getContext('2d'), {
-    type: 'bar',
-    data: {
+  byClientChart = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{
       labels,
-      datasets: [{
-        label: 'Remaining',
-        data: points,
-        backgroundColor:     (ctx) => ctx.raw.color,
-        hoverBackgroundColor:(ctx) => ctx.raw.hover,
-        borderColor:         (ctx) => ctx.raw.stroke,
-        borderWidth: 1.5,
-        borderRadius: 10,
-        borderSkipped: false,
-        maxBarThickness: 44
-      }]
+      datasets:[
+        { label:'Completed', data:completes, backgroundColor:'rgba(107,114,128,0.50)', borderColor:'#6b7280',
+          borderWidth:1, borderRadius:10, borderSkipped:false, maxBarThickness:44, stack:'totals' },
+        { label:'Remaining', data:remains, backgroundColor:statuses.map(s=>statusColors(s).fill),
+          hoverBackgroundColor:statuses.map(s=>statusColors(s).hover),
+          borderColor:statuses.map(s=>statusColors(s).stroke),
+          borderWidth:1.5, borderRadius:10, borderSkipped:false, maxBarThickness:44, stack:'totals' }
+      ]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: 'rgba(17,24,39,0.9)',
-          padding: 10,
-          callbacks: {
-            title: (items) => items[0].label,
-            label: (ctx) => {
-              const raw = ctx.raw || {};
-              const rem = ctx.parsed.y ?? 0;
-              const tgt = raw.target ?? (rem + (raw.completed ?? 0));
-              const done = raw.completed ?? 0;
-              const pct = tgt ? Math.round((done / tgt) * 100) : 0;
-              return [
-                `Remaining: ${Number(rem).toLocaleString()}`,
-                `Completed: ${Number(done).toLocaleString()} of ${Number(tgt).toLocaleString()} (${pct}%)`
-              ];
-            }
-          }
-        }
-      },
-      scales: {
-        x: {
-          stacked: false,
-          ticks: {
-            autoSkip: false,
-            maxRotation: 0,
-            callback: (v) => {
-              const s = String(labels[v]);
-              return s.length > 18 ? s.slice(0, 18) + '…' : s;
-            }
-          }
-        },
-        y: {
-          stacked: false,
-          beginAtZero: true,
-          min:  yCfg.min,
-          max:  yCfg.max,
-          ticks:{ stepSize: yCfg.stepSize },
-          grid: { color: 'rgba(0,0,0,0.06)' }
-        }
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:{duration:400},
+      plugins:{ legend:{display:true}, tooltip:{padding:12,displayColors:false} },
+      scales:{
+        x:{ stacked:true, grid:{display:false}, ticks:{autoSkip:false, maxRotation:0, minRotation:0, font:{size:11},
+            callback:(v,i)=> (labels[i]||'').length>16 ? (labels[i].slice(0,16)+'…') : labels[i]} },
+        y:{ stacked:true, min:yCfg.min, max:yCfg.max, ticks:{stepSize:yCfg.stepSize}, grid:{color:'rgba(17,24,39,0.08)'} }
       }
     }
   });
@@ -479,72 +419,19 @@ async function loadClientDetail(){
     }
   }
 
-const canv = document.getElementById('clientWeekChart');
-if (canv && window.Chart) {
-  const colors = statusColors(status);
-  const yCfg = yScaleFor([required], 0.08);
-
-  if (window.__clientChart) window.__clientChart.destroy();
-
-  const point = {
-    x: 'This week',
-    y: remaining,
-    completed: doneThis,
-    target: required,
-    color: colors.fill,
-    hover: colors.hover,
-    stroke: colors.stroke
-  };
-
-  window.__clientChart = new Chart(canv.getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels: ['This week'],
-      datasets: [{
-        label: 'Remaining',
-        data: [point],
-        backgroundColor:      (ctx) => ctx.raw.color,
-        hoverBackgroundColor: (ctx) => ctx.raw.hover,
-        borderColor:          (ctx) => ctx.raw.stroke,
-        borderWidth: 1.5,
-        borderRadius: 12,
-        borderSkipped: false,
-        maxBarThickness: 56
-      }]
-    },
-    options: {
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: 'rgba(17,24,39,0.9)',
-          padding: 10,
-          callbacks: {
-            title: () => 'This week',
-            label: (ctx) => {
-              const raw = ctx.raw || {};
-              const rem = ctx.parsed.y ?? 0;
-              const tgt = raw.target ?? (rem + (raw.completed ?? 0));
-              const done = raw.completed ?? 0;
-              const pct = tgt ? Math.round((done / tgt) * 100) : 0;
-              return [
-                `Remaining: ${Number(rem).toLocaleString()}`,
-                `Completed: ${Number(done).toLocaleString()} of ${Number(tgt).toLocaleString()} (${pct}%)`
-              ];
-            }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          min: yCfg.min,
-          max: yCfg.max,
-          ticks: { stepSize: yCfg.stepSize }
-        },
-        x: { ticks: { maxRotation: 0 } }
-      }
-    }
-  });
+  const canv=document.getElementById('clientWeekChart'); if(canv && window.Chart){
+    const yCfg=yScaleFor([required],0.08); const colors=statusColors(status);
+    if(window.__clientChart) window.__clientChart.destroy();
+    window.__clientChart=new Chart(canv.getContext('2d'),{
+      type:'bar',
+      data:{ labels:['This week'],
+        datasets:[
+          { label:'Completed', data:[doneThis], backgroundColor:'rgba(107,114,128,0.50)', borderColor:'#6b7280', borderWidth:1, borderRadius:10, borderSkipped:false, maxBarThickness:56, stack:'totals' },
+          { label:'Remaining', data:[remaining], backgroundColor:colors.fill, borderColor:colors.stroke, borderWidth:1.5, borderRadius:10, borderSkipped:false, maxBarThickness:56, stack:'totals' }
+        ]},
+      options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{stacked:true, grid:{display:false}}, y:{stacked:true, min:yCfg.min,max:yCfg.max,ticks:{stepSize:yCfg.stepSize},grid:{color:'rgba(17,24,39,0.08)'}}}}
+    });
+  }
 }
 
 /* ===== Boot ===== */
