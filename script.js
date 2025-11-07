@@ -1,3 +1,4 @@
+import { requireAuth, wireLogoutButton } from './auth.js';
 // script.js — weekly model + clients CRUD + delete + addresses/EMRs + dashboard + client detail
 // -------------------------------------------------------------------------------
 import { getSupabase } from './supabaseClient.js';
@@ -771,15 +772,17 @@ async function loadClientDetail() {
 } // << closes async function loadClientDetail()
 
 /* ===== Boot ===== */
-window.addEventListener('DOMContentLoaded', () => {
-  // dashboard filter
-  document.getElementById('filterContracted')?.addEventListener('change', loadDashboard);
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await requireAuth();           // redirects to login if not signed in
+  } catch { return; }              // stop running this page if we redirected
 
-  // initial loads (each is safe to run on pages where the target DOM doesn’t exist)
+  wireLogoutButton();
+
+  document.getElementById('filterContracted')?.addEventListener('change', loadDashboard);
   loadDashboard();
   loadClientsList();
   loadClientDetail();
 
-  // expose for inline "Log" button in client table/detail rows
   window.openLogModal = openLogModal;
 });
